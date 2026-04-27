@@ -2544,12 +2544,15 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(2)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
   const C=(k,t)=>{const s=state.invCharts[k];return`<div class="cb"><div class="ct">${t}</div>${s?`<img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/>`:`<div class="np">Chart not uploaded</div>`}</div>`;};
-  const propNames=state.invProperties.map(p=>p.name).filter(Boolean).join(" · ");
+  const propNames=[...state.invProperties.map(p=>p.name).filter(Boolean),
+    ...(/mwp\s*5/i.test(invName||'')?['2520 M Street','Private Money Investment']:[])
+  ].join(" · ");
   const propPhotos=state.invProperties.filter(p=>p.name).map(p=>({name:p.name,photo:loadPhotoForProperty(p.name)})).filter(p=>p.photo);
-  // MWP 5: always append "Private Money Investment" as a 4th cover entry (photo optional)
+  // MWP 5: append "2520 M Street" and "Private Money Investment" as additional cover entries (photos optional)
   if(/mwp\s*5/i.test(invName||'')){
-    const pmiPhoto=loadPhotoForProperty('Private Money Investment');
-    propPhotos.push({name:'Private Money Investment',photo:pmiPhoto||null});
+    ['2520 M Street','Private Money Investment'].forEach(n=>{
+      propPhotos.push({name:n,photo:loadPhotoForProperty(n)||null});
+    });
   }
   const n_photos=propPhotos.length;
   // Always render in a 3-column grid so e.g. 6 photos = 2 rows × 3 columns,
@@ -3135,11 +3138,14 @@ function renderInvestmentStep0(){
         </div>
       </div>
       <div style="margin-top:12px;border-top:1px solid #fcd34d;padding-top:12px">
-        <div style="font-size:11px;font-weight:600;color:#78350f;margin-bottom:6px">Private Money Investment — Cover Photo</div>
-        ${(()=>{const pmiPhoto=loadPhotoForProperty('Private Money Investment');return pmiPhoto
-          ?`<div style="display:flex;align-items:center;gap:10px"><img src="${pmiPhoto}" style="width:48px;height:32px;object-fit:cover;border-radius:4px;border:1px solid #fcd34d;flex-shrink:0"/><span style="font-size:11px;color:#16a34a;font-weight:600">✓ Uploaded</span><button onclick="uploadMWP5CoverPhoto()" style="margin-left:auto;font-size:11px;color:#78350f;background:white;border:1px solid #fcd34d;border-radius:4px;padding:3px 8px;cursor:pointer">Replace</button></div>`
-          :`<div style="display:flex;align-items:center;gap:10px"><span style="font-size:11px;color:#92400e">No image yet — appears on the report cover alongside the other properties</span><button onclick="uploadMWP5CoverPhoto()" style="margin-left:auto;background:#fef9c3;color:#92400e;border:1px solid #fcd34d;border-radius:4px;font-size:11px;font-weight:600;padding:4px 10px;cursor:pointer;white-space:nowrap">Upload Image</button></div>`;
-        })()}
+        ${[['Private Money Investment','Private Money Investment'],['2520 M Street','2520 M Street']].map(([label,key])=>`
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#78350f;margin-bottom:6px">${label} — Cover Photo</div>
+          ${(()=>{const ph=loadPhotoForProperty(key);return ph
+            ?`<div style="display:flex;align-items:center;gap:10px"><img src="${ph}" style="width:48px;height:32px;object-fit:cover;border-radius:4px;border:1px solid #fcd34d;flex-shrink:0"/><span style="font-size:11px;color:#16a34a;font-weight:600">✓ Uploaded</span><button onclick="uploadMWP5Photo('${key}')" style="margin-left:auto;font-size:11px;color:#78350f;background:white;border:1px solid #fcd34d;border-radius:4px;padding:3px 8px;cursor:pointer">Replace</button></div>`
+            :`<div style="display:flex;align-items:center;gap:10px"><span style="font-size:11px;color:#92400e">No image yet — appears on the report cover</span><button onclick="uploadMWP5Photo('${key}')" style="margin-left:auto;background:#fef9c3;color:#92400e;border:1px solid #fcd34d;border-radius:4px;font-size:11px;font-weight:600;padding:4px 10px;cursor:pointer;white-space:nowrap">Upload Image</button></div>`;
+          })()}
+        </div>`).join("")}
       </div>
     </div>
     <div class="btn-row" style="margin-top:16px">
@@ -3923,12 +3929,12 @@ function uploadInvPropertyPhoto(propId){
   };
   inp.click();
 }
-function uploadMWP5CoverPhoto(){
+function uploadMWP5Photo(name){
   const inp=document.createElement("input");inp.type="file";inp.accept=".png,.jpg,.jpeg";
   inp.onchange=e=>{
     const f=e.target.files[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty('Private Money Investment',compressed);render();});};
+    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(name,compressed);render();});};
     r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
