@@ -4052,7 +4052,7 @@ function addBgChampionChart(){
   // Guard: charts are keyed to the investment name + quarter. If either is missing
   // the upload will be held in memory only (saveProgress silently no-ops). Warn now
   // so the user knows to name the investment and set the quarter first.
-  if(!state.investmentName||!state.quarter){
+  if(!state.investmentName||!state.currentQuarter){
     showError("Please enter the investment name and select a quarter before uploading charts — this ensures they are saved correctly.");
     return;
   }
