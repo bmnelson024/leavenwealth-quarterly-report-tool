@@ -4091,7 +4091,8 @@ function parsePriorQuarterFromExcel(buffer, currentQuarter) {
       else if((label==="total expense"||label==="total expenses")&&!_prevTeSet){prevExpense=colSum;inExpenseSection=false;}
       if(label==="noi - net operating income"||label==="net operating income"||label==="net income"||
          label.startsWith("net non-operating")){ if(label.includes("noi")||label==="net operating income") prevNoi=colSum; inExpenseSection=false; }
-      if(label==="total capital expenses"||label==="total for capital improvements") prevCapex=colSum;
+      if(label==="total capital expenses"||label==="total for capital improvements") prevCapex=Math.abs(colSum);
+      if(label==="capital expenditures"&&colSum!==0) prevCapex=Math.abs(colSum);
       // Individual line items only: not a "Total X" row, not a summary/NOI row
       if(inExpenseSection && !label.startsWith("total") && !EXPENSE_NARRATIVE_EXCLUDE.has(label) && Math.abs(colSum)>0){
         prevExpenseCats.push({ name:rawLabel.trim(), amount:colSum });
@@ -4747,7 +4748,7 @@ function render(){
       </div>`;
       })()}
       ${fileRow("income","Income Statement (12-Month)","Upload a 12-month statement for prior quarter comparison",true)}
-      ${fileRow("balanceSheet","Balance Sheet <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Balance sheet as of end of quarter — adds a Balance Sheet page to the report",true)}
+      ${/brent\s*village/i.test(state.propertyName||'')?`${fileRow("balanceSheet","Balance Sheet <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Balance sheet as of end of quarter — adds a Balance Sheet page to the report",true)}`":""}
       ${rrSection}
       ${fileRow("leasing","Leasing Agent Report","Jan 1 – Mar 24, 2026",'text')}
       ${fileRow("delinquency","Delinquent Tenants","Current",'text')}
@@ -4771,7 +4772,6 @@ function render(){
         <button class="upload-btn" style="white-space:nowrap;padding:8px 14px" onclick="loadAllAFFiles()">📂 Upload All Reports</button>
       </div>
       ${fileRow("income","Income Statement (12-Month)","Upload a 12-month statement for prior quarter comparison",true)}
-      ${fileRow("balanceSheet","Balance Sheet <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Balance sheet as of end of quarter — adds a Balance Sheet page to the report",true)}
       ${rrSection}
       ${fileRow("leasingSummary","Leasing Summary","Leasing Summary report for the quarter",'text')}
       ${fileRow("renewalSummary","Renewal Summary","Renewal Summary report for the quarter",'text')}
