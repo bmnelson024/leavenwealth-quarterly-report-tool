@@ -1015,6 +1015,10 @@ function selectSource(src){
   state.cashOnHandInput = "";
   state.suppIncome = {sfhIncome:'', sfhExpenses:'', locIncome:''};
   state.bgChampionCustom = {commentary:'', charts:[]};
+  state.econOcc = {m1:'', m2:'', m3:''};
+  state.charts = {chart_operating_income:null,chart_operating_expense:null,chart_income_vs_expense:null,chart_noi:null,chart_lease_expirations:null,chart_rent_growth:null,chart_occupancy_rate:null,chart_capital_expense:null,chart_maintenance_expense:null,chart_loss_to_lease:null};
+  state.invCharts = {inv_operating_income:null,inv_operating_expense:null,inv_income_by_property:null,inv_expense_by_property:null,inv_income_vs_expense:null,inv_noi:null,inv_noi_by_property:null,inv_utility:null,inv_lease_expirations:null,inv_rent_growth:null,inv_occupancy_rate:null,inv_occupancy_by_property:null};
+  state.generating = false;
   state.step = 0;
   // Always clear investment identity fields — stale investmentName / invProperties
   // from a prior report bleed into the new form if these are left intact.
@@ -3210,7 +3214,7 @@ function renderInvestmentStep0(){
         <div style="font-size:11px;font-weight:600;color:#1e3a8a;margin-bottom:4px">Commentary</div>
         <textarea rows="5" placeholder="Enter any additional commentary to appear in the report..."
           style="width:100%;padding:8px 10px;border:1px solid #bfdbfe;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;box-sizing:border-box;resize:vertical"
-          oninput="if(!state.bgChampionCustom)state.bgChampionCustom={commentary:'',charts:[]};state.bgChampionCustom.commentary=this.value">${escapeHtml((state.bgChampionCustom&&state.bgChampionCustom.commentary)||'')}</textarea>
+          oninput="if(!state.bgChampionCustom)state.bgChampionCustom={commentary:'',charts:[]};state.bgChampionCustom.commentary=this.value;armAutoSave();scheduleAutoSave()">${escapeHtml((state.bgChampionCustom&&state.bgChampionCustom.commentary)||'')}</textarea>
       </div>
       <div style="font-size:11px;font-weight:600;color:#1e3a8a;margin-bottom:8px">Charts</div>
       ${(()=>{
@@ -3955,6 +3959,31 @@ function fuzzyKeyScore(a, b){
   if(ha.indexOf(hb) !== -1) return b.length;
   return 0;
 }
+// Fuzzy-only photo lookup: scans lw_photo_* keys without retrying the exact match.
+// Used by onPropertyNameBlur when the exact lookup was already attempted during typing.
+function _fuzzyPhotoScan(name){
+  if(!name) return null;
+  try{
+    const targetKey=photoStorageKey(name);
+    const norm=targetKey.slice("lw_photo_".length);
+    if(!norm) return null;
+    let best=null, bestScore=0;
+    for(const k of dbKeys()){
+      if(!k.startsWith("lw_photo_")) continue;
+      const stored=k.slice("lw_photo_".length);
+      const score=fuzzyKeyScore(norm, stored);
+      if(score>=5&&score>bestScore){best=k;bestScore=score;}
+    }
+    if(best) return dbGet(best);
+    const aliases=getPropertyAliases(name);
+    for(const alias of aliases){
+      if(alias===name) continue;
+      const aliasVal=dbGet(photoStorageKey(alias));
+      if(aliasVal) return aliasVal;
+    }
+    return null;
+  } catch(e){ return null; }
+}
 function loadPhotoForProperty(name){
   if(!name) return null;
   try{
@@ -4018,6 +4047,13 @@ function uploadMWP5Photo(name){
   inp.click();
 }
 function addBgChampionChart(){
+  // Guard: charts are keyed to the investment name + quarter. If either is missing
+  // the upload will be held in memory only (saveProgress silently no-ops). Warn now
+  // so the user knows to name the investment and set the quarter first.
+  if(!state.investmentName||!state.quarter){
+    showError("Please enter the investment name and select a quarter before uploading charts — this ensures they are saved correctly.");
+    return;
+  }
   const inp=document.createElement("input");inp.type="file";inp.accept=".png,.jpg,.jpeg,.gif,.webp";
   inp.onchange=e=>{
     const f=e.target.files[0];if(!f)return;
@@ -4144,9 +4180,11 @@ function onPropertyNameBlur(val){
   // the property (e.g. "Greenway 1" → "The Greenway 1"). This is intentionally
   // deferred from onPropertyNameChange to avoid writing garbage short-name keys.
   if(state.propertyPhoto) savePhotoForProperty(val, state.propertyPhoto);
-  // Fuzzy fallback lookups now that the name is complete.
   if(!state.propertyPhoto){
-    const saved=loadPhotoForProperty(val);
+    const normAlphaLen=normalizePropertyKey(val).replace(/_/g,'').length;
+    // For names long enough to have triggered the exact lookup in onPropertyNameChange,
+    // skip the redundant exact pass and go straight to the fuzzy scan.
+    const saved = normAlphaLen>=4 ? _fuzzyPhotoScan(val) : loadPhotoForProperty(val);
     if(saved){ state.propertyPhoto=saved; render(); }
   }
   if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
@@ -4530,6 +4568,8 @@ function parseAFCapexGL(fileData, quarterStr) {
       }
     }
     if(headerRowIdx < 0 || colDate < 0 || colDebit < 0) return null;
+    // colCredit may be -1 if the column is absent or uses a non-standard header;
+    // treat missing credit as 0 (net = debit) rather than silently reading row[-1].
 
     // Parse quarter date range from string like "Q1 2026" or "Q4 2025"
     const qMatch = quarterStr.match(/Q(\d)\s+(\d{4})/i);
@@ -4585,7 +4625,7 @@ function parseAFCapexGL(fileData, quarterStr) {
       if(txDate < qStart || txDate > qEnd) continue;
 
       const debit  = parseCur(row[colDebit])  || 0;
-      const credit = parseCur(row[colCredit]) || 0;
+      const credit = colCredit >= 0 ? (parseCur(row[colCredit]) || 0) : 0;
       const net = debit - credit;
       if(net === 0) continue;
 
