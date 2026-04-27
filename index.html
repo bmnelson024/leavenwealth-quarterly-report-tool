@@ -4503,6 +4503,16 @@ function parseAFCapexGL(fileData, quarterStr) {
     }
     if(!rows.length) return null;
 
+    // Detect AppFolio "General Ledger" format: early rows contain "Date Range:" or "GL Accounts:".
+    // In this format the file is pre-filtered to capex accounts and transactions are grouped
+    // by MONTH (e.g. "Apr 2025") rather than by GL account section header.
+    // Contrast with the older format which has "Capital Expenditures — Appliances" style headers.
+    let isAFGLMonthFormat = false;
+    for(let i=0; i<Math.min(15, rows.length); i++){
+      const c0 = String(rows[i]?.[0]||"").trim();
+      if(/^date\s*range:/i.test(c0)||/^gl\s*accounts:/i.test(c0)){isAFGLMonthFormat=true;break;}
+    }
+
     // Detect AF GL format: look for header row with "GL Account" and "Payee"
     let headerRowIdx = -1;
     let colDate=-1, colDebit=-1, colCredit=-1, colPayee=-1, colDesc=-1, colRemarks=-1;
@@ -4532,8 +4542,10 @@ function parseAFCapexGL(fileData, quarterStr) {
     const qStart = new Date(qYear, qStartMonth, 1);
     const qEnd   = new Date(qYear, qStartMonth+3, 0, 23, 59, 59, 999);
 
-    // Walk rows, accumulating transactions across ALL Capital Expenditures sections
-    let inCapexSection = false;
+    // Walk rows, accumulating transactions across ALL Capital Expenditures sections.
+    // isAFGLMonthFormat: file is pre-filtered to capex accounts — all rows are capex.
+    // Classic format: sections are demarcated by "Capital Expenditures — ..." account headers.
+    let inCapexSection = isAFGLMonthFormat; // pre-filtered files start in capex mode
     const vendorMap = new Map(); // vendor → net amount
 
     for(let i=headerRowIdx+1; i<rows.length; i++) {
@@ -4545,10 +4557,12 @@ function parseAFCapexGL(fileData, quarterStr) {
       if(col0 && noData) {
         // Always skip pure summary rows — never let them end the section
         if(/^(starting\s*balance|net\s*change|ending\s*balance|total)$/i.test(col0)) continue;
-        // GL account section header
+        // In month-grouped AF GL format, "Apr 2025" etc. are grouping headers only — skip without touching inCapexSection
+        if(isAFGLMonthFormat && /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(col0)) continue;
+        // Classic format: GL account section header — toggle capex mode
         if(/capital\s*expend/i.test(col0)) {
           inCapexSection = true; // Enter (or stay in) a capex account — accumulate across all capex accts
-        } else {
+        } else if(!isAFGLMonthFormat) {
           inCapexSection = false; // Not a capex account — keep scanning in case more capex accounts appear later
         }
         continue;
