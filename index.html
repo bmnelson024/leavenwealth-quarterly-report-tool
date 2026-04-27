@@ -4056,19 +4056,22 @@ function addBgChampionChart(){
     showError("Please enter the investment name and select a quarter before uploading charts — this ensures they are saved correctly.");
     return;
   }
-  const inp=document.createElement("input");inp.type="file";inp.accept=".png,.jpg,.jpeg,.gif,.webp";
+  const inp=document.createElement("input");inp.type="file";inp.accept=".png,.jpg,.jpeg,.gif,.webp";inp.multiple=true;
   inp.onchange=e=>{
-    const f=e.target.files[0];if(!f)return;
-    const r=new FileReader();
-    r.onload=ev=>{
-      if(!state.bgChampionCustom) state.bgChampionCustom={commentary:"",charts:[]};
-      if(!Array.isArray(state.bgChampionCustom.charts)) state.bgChampionCustom.charts=[];
-      state.bgChampionCustom.charts.push(ev.target.result);
-      saveProgress({silent:true,allowEmpty:true});
-      render();
-    };
-    r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
-    r.readAsDataURL(f);
+    const files=Array.from(e.target.files);if(!files.length)return;
+    if(!state.bgChampionCustom) state.bgChampionCustom={commentary:"",charts:[]};
+    if(!Array.isArray(state.bgChampionCustom.charts)) state.bgChampionCustom.charts=[];
+    let loaded=0;
+    files.forEach(f=>{
+      const r=new FileReader();
+      r.onload=ev=>{
+        state.bgChampionCustom.charts.push(ev.target.result);
+        loaded++;
+        if(loaded===files.length){ saveProgress({silent:true,allowEmpty:true}); render(); }
+      };
+      r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
+      r.readAsDataURL(f);
+    });
   };
   inp.click();
 }
