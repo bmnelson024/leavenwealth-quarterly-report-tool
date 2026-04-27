@@ -1451,6 +1451,7 @@ const parseExcel = buffer => {
     if(lc==="net operating income"||lc==="noi - net operating income"||lc==="net income") noi=total;
     if(lc==="capital improvements"||lc==="capital expenses") inCapex=true;
     if(lc==="total for capital improvements"||lc==="total capital expenses"){capex=Math.abs(total);inCapex=false;}
+    if(lc==="capital expenditures"&&total!==0){capex=Math.abs(total);capexItems.push({name:label,amount:Math.abs(total)});}
     if(inCapex&&label&&!lc.startsWith("total")&&total!==0&&lc!=="capital improvements") capexItems.push({name:label,amount:Math.abs(total)});
     const monthAmounts=monthCols.map(({colIdx})=>parseCur(row[colIdx]||0));
     const isTotal=lc.startsWith("total")||lc==="net operating income"||lc==="net income";
@@ -3672,6 +3673,8 @@ function loadAllAFFiles(){
         {assigned.renewalSummary={file:f,asBuffer:'text'};return;}
       if(has(base,"delinquency","delinquent"))
         {assigned.delinquency={file:f,asBuffer:'text'};return;}
+      if(has(base,"capital expense","capex","transaction detail","capital expenditure"))
+        {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
       unmatched.push(f.name);
     });
     // Sort rent rolls: base file (no suffix, =0) → rr1, (1) → rr2, (2) → rr3
@@ -4008,6 +4011,7 @@ function parseQuarterFromExcel(buffer, currentQuarter) {
       // noi calculated below from totalIncome - totalExpense to avoid Buildium labelling differences
       if(label==="capital expenses"||label==="capital improvements") inCapex = true;
       if(label==="total capital expenses"||label==="total for capital improvements") { capex=Math.abs(quarterTotal); inCapex=false; }
+      if(label==="capital expenditures"&&quarterTotal!==0){ capex=Math.abs(quarterTotal); capexItems.push({name:rawLabel.trim(),amount:Math.abs(quarterTotal)}); }
       if(inCapex && label && !label.startsWith("total") && quarterTotal!==0 && label!=="capital expenses" && label!=="capital improvements") {
         capexItems.push({name:rawLabel.trim(), amount:Math.abs(quarterTotal)});
       }
@@ -4772,6 +4776,7 @@ function render(){
       ${fileRow("leasingSummary","Leasing Summary","Leasing Summary report for the quarter",'text')}
       ${fileRow("renewalSummary","Renewal Summary","Renewal Summary report for the quarter",'text')}
       ${fileRow("delinquency","Delinquency As Of","Delinquency As Of report — current period",'text')}
+      ${fileRow("capexDetail","Capital Expense Report <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","12-month cash flow or capital expense export — used to identify remodeled units and capex detail",'auto')}
       ${cashOnHandBox}${econBox}${chartsSection}
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="save-btn" style="flex:0 0 auto" onclick="saveProgress({allowEmpty:true})">💾 Save</button>
