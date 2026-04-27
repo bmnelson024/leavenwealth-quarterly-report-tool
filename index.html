@@ -410,6 +410,7 @@ function _makeDefaultState(){
     charts: { chart_operating_income:null, chart_operating_expense:null, chart_income_vs_expense:null, chart_noi:null, chart_lease_expirations:null, chart_rent_growth:null, chart_occupancy_rate:null, chart_capital_expense:null, chart_maintenance_expense:null, chart_loss_to_lease:null },
     econOcc: { m1:"", m2:"", m3:"" },
     propertyPhoto: null,
+    photoAutoLoaded: false,   // true when photo came from db lookup (vs manual upload) — triggers verify-notice in UI
     assetFacts: null,
     prevMetrics: null,
     metrics: null,
@@ -1010,6 +1011,7 @@ function selectSource(src){
   state.currentQuarter = "";
   state.prevQuarterLabel = "";
   state.propertyPhoto = null;
+  state.photoAutoLoaded = false;
   state.assetFacts = null;
   state.prevOccupancyInput = "";
   state.cashOnHandInput = "";
@@ -4084,6 +4086,7 @@ function loadPhoto(){
     r.onload=ev=>{
       compressPhoto(ev.target.result,compressed=>{
         state.propertyPhoto=compressed;
+        state.photoAutoLoaded=false;   // user manually uploaded — clear the verify-notice
         savePhotoForProperty(state.propertyName, state.propertyPhoto);
         render();
       });
@@ -4096,6 +4099,7 @@ function loadPhoto(){
 function clearPhoto(){
   removePhotoForProperty(state.propertyName);
   state.propertyPhoto=null;
+  state.photoAutoLoaded=false;
   render();
 }
 function calcPrevQuarterLabel(quarter){
@@ -4172,7 +4176,11 @@ function onPropertyNameBlur(val){
   if(!state.propertyPhoto){
     // Full exact + fuzzy lookup now that the name is complete.
     const saved=loadPhotoForProperty(val);
-    if(saved){ state.propertyPhoto=saved; render(); }
+    if(saved){
+      state.propertyPhoto=saved;
+      state.photoAutoLoaded=true;   // flag so the UI can show a "verify this" notice
+      render();
+    }
   }
   if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
     const savedFacts=loadAssetFactsForProperty(val);
@@ -5056,7 +5064,9 @@ function render(){
     const avgEcon=_econAvgStr(state.econOcc);
     const sourceBadge=`<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${state.source==='appfolio'?'#e0f2fe':'#dcfce7'};color:${state.source==='appfolio'?'#0369a1':'#15803d'};margin-left:8px;vertical-align:middle">${state.source==='appfolio'?'AppFolio':'Buildium'}</span>`;
     const photoBox = state.propertyPhoto
-      ? `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:1px solid #c8e6de"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px">✅ Property photo saved</div><div style="font-size:12px;color:#5a8070;margin-bottom:10px">Will auto-load next quarter for <strong>${state.propertyName||"this property"}</strong>.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`
+      ? (state.photoAutoLoaded
+          ? `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #f59e0b"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px;color:#92400e">⚠️ Photo auto-loaded from saved data</div><div style="font-size:12px;color:#78350f;margin-bottom:10px">Please verify this is the correct photo for <strong>${state.propertyName||"this property"}</strong>. If not, remove it and upload the right one.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`
+          : `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:1px solid #c8e6de"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px">✅ Property photo saved</div><div style="font-size:12px;color:#5a8070;margin-bottom:10px">Will auto-load next quarter for <strong>${state.propertyName||"this property"}</strong>.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`)
       : `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font-weight:600;font-size:13px;margin-bottom:4px">No photo uploaded</div><div style="font-size:12px;color:#5a8070">Upload once — saved automatically for future quarters.</div></div><button class="upload-btn" onclick="loadPhoto()">Upload Photo</button></div>`;
     const commonTop = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #c8e6de">
