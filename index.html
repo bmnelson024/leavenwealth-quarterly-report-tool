@@ -801,6 +801,7 @@ function loadSave(key){
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
       businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''},
+      suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       invReportHTML:null,
       // Reset transient UI flags — these are never saved and must not bleed across sessions
       _showInvPrevPicker:false, _invPrevSource:null,
@@ -996,6 +997,17 @@ function selectSource(src){
   state.narrativesEdited = false;
   state.sections = makeDefaultSections();
   state.reportHTML = null;
+  // Clear property-specific identity fields so they can't bleed from one property
+  // into a newly-started report (e.g. Greenway 1 → Greenway 2 cross-contamination).
+  state.propertyName = "";
+  state.currentQuarter = "";
+  state.prevQuarterLabel = "";
+  state.propertyPhoto = null;
+  state.assetFacts = null;
+  state.prevOccupancyInput = "";
+  state.cashOnHandInput = "";
+  state.suppIncome = {sfhIncome:'', sfhExpenses:'', locIncome:''};
+  state.step = 0;
   // Investment-mode data only gets cleared when we're leaving investment mode
   // (or going to the picker). Preserves work-in-progress when the user re-clicks
   // the same source card.
