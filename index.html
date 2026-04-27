@@ -2555,18 +2555,25 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
     });
   }
   const n_photos=propPhotos.length;
-  // Always render in a 3-column grid so e.g. 6 photos = 2 rows × 3 columns,
-  // never an odd layout like 5+1.  For 1–2 photos fall back to a centred row.
   const thumbW=190;
   const thumbH=Math.round(thumbW*0.65);
-  const photoStrip=n_photos>0?`<div style="margin-top:36px;display:grid;grid-template-columns:repeat(${n_photos<=2?n_photos:n_photos===4?2:3},${thumbW}px);gap:16px;justify-content:center;max-width:660px">
-    ${propPhotos.map(p=>`<div style="text-align:center">
-      ${p.photo
-        ?`<img src="${p.photo}" style="width:${thumbW}px;height:${thumbH}px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,196,140,0.4);display:block"/>`
-        :`<div style="width:${thumbW}px;height:${thumbH}px;border-radius:8px;border:2px solid rgba(0,196,140,0.4);background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;color:rgba(255,255,255,0.35);font-family:sans-serif;letter-spacing:1px;text-transform:uppercase">No Image</span></div>`}
-      <div style="font-size:9px;color:rgba(255,255,255,0.55);margin-top:6px;font-family:sans-serif;letter-spacing:1.5px;text-transform:uppercase;width:${thumbW}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.name)}</div>
-    </div>`).join("")}
-  </div>`:"";
+  const photoThumb=p=>`<div style="text-align:center;flex-shrink:0">
+    ${p.photo
+      ?`<img src="${p.photo}" style="width:${thumbW}px;height:${thumbH}px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,196,140,0.4);display:block"/>`
+      :`<div style="width:${thumbW}px;height:${thumbH}px;border-radius:8px;border:2px solid rgba(0,196,140,0.4);background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;color:rgba(255,255,255,0.35);font-family:sans-serif;letter-spacing:1px;text-transform:uppercase">No Image</span></div>`}
+    <div style="font-size:9px;color:rgba(255,255,255,0.55);margin-top:6px;font-family:sans-serif;letter-spacing:1.5px;text-transform:uppercase;width:${thumbW}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.name)}</div>
+  </div>`;
+  // For 5 photos render as two flex rows (3 top, 2 bottom) so the bottom pair stays centered.
+  // For all other counts use a grid: 1–2 → single row, 4 → 2×2, else 3 columns.
+  const photoStrip=n_photos===0?""
+    :n_photos===5
+      ?`<div style="margin-top:36px;display:flex;flex-direction:column;align-items:center;gap:16px">
+          <div style="display:flex;gap:16px">${propPhotos.slice(0,3).map(photoThumb).join("")}</div>
+          <div style="display:flex;gap:16px">${propPhotos.slice(3).map(photoThumb).join("")}</div>
+        </div>`
+      :`<div style="margin-top:36px;display:grid;grid-template-columns:repeat(${n_photos<=2?n_photos:n_photos===4?2:3},${thumbW}px);gap:16px;justify-content:center;max-width:660px">
+          ${propPhotos.map(photoThumb).join("")}
+        </div>`;
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(inv)} ${escapeHtml(qtr)} Investor Report</title><style>
 :root{--dark:#1a3a35;--teal:#00c48c;--teal-mid:#2e7d6e;--teal-light:#e6f9f4;--cream:#ffffff;--text:#1a3a35;--muted:#5a8070;--border:#c8e6de;}
