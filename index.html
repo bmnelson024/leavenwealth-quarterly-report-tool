@@ -1438,7 +1438,7 @@ const parseExcel = buffer => {
   let inCapex=false, totalExpenseSet=false, totalIncomeSet=false;
   const dataRows=headerRowIdx>=0?rows.slice(headerRowIdx+1):rows;
   // First pass: collect section group names from "Total X" rows (mirrors parseQuarterFromExcel logic)
-  const _peSkipTotals=new Set(["total operating income","total income","total operating expense","total operating expenses","total capital expenses","total for capital improvements","noi - net operating income","net operating income","net income"]);
+  const _peSkipTotals=new Set(["total operating income","total income","total operating expense","total operating expenses","total capital expenses","total for capital improvements","total maintenance - capex","noi - net operating income","net operating income","net income"]);
   const peSectionGroupNames=new Set();
   for(const row of dataRows){
     const lbl=String(row[0]||row[1]||"").trim().toLowerCase().replace(/\s+/g," ");
@@ -1469,10 +1469,10 @@ const parseExcel = buffer => {
     if(lc==="total operating expense"||lc==="total operating expenses"){totalExpense=total;totalExpenseSet=true;}
     else if((lc==="total expense"||lc==="total expenses")&&!totalExpenseSet) totalExpense=total;
     if(lc==="net operating income"||lc==="noi - net operating income"||lc==="net income") noi=total;
-    if(lc==="capital improvements"||lc==="capital expenses") inCapex=true;
-    if(lc==="total for capital improvements"||lc==="total capital expenses"){capex=Math.abs(total);inCapex=false;}
+    if(lc==="capital improvements"||lc==="capital expenses"||lc==="maintenance - capex") inCapex=true;
+    if(lc==="total for capital improvements"||lc==="total capital expenses"||lc==="total maintenance - capex"){capex=Math.abs(total);inCapex=false;}
     if(lc==="capital expenditures"&&total!==0){capex=Math.abs(total);capexItems.push({name:label,amount:Math.abs(total)});}
-    if(inCapex&&label&&!lc.startsWith("total")&&total!==0&&lc!=="capital improvements") capexItems.push({name:label,amount:Math.abs(total)});
+    if(inCapex&&label&&!lc.startsWith("total")&&total!==0&&lc!=="capital improvements"&&lc!=="maintenance - capex") capexItems.push({name:label,amount:Math.abs(total)});
     const monthAmounts=monthCols.map(({colIdx})=>parseCur(row[colIdx]||0));
     const isTotal=lc.startsWith("total")||lc==="net operating income"||lc==="net income";
     // Section header only if zero total AND has a matching "Total X" row (same logic as parseQuarterFromExcel)
@@ -2056,7 +2056,7 @@ ${(()=>{
     ${mc.map(c=>`<th style="text-align:right;background:var(--dark);color:white;padding:7px 10px;font-size:10px;letter-spacing:1px;white-space:nowrap;font-family:sans-serif;">${c.label}</th>`).join("")}
     <th style="text-align:right;background:var(--dark);color:white;padding:7px 10px;font-size:10px;letter-spacing:1px;white-space:nowrap;font-family:sans-serif;">Total</th>
   </tr></thead>`;
-  const GRAND_TOTALS=new Set(["total operating income","total income","total operating expense","total operating expenses","total expenses","noi - net operating income","net operating income","net income","total capital expenses","total for capital improvements"]);
+  const GRAND_TOTALS=new Set(["total operating income","total income","total operating expense","total operating expenses","total expenses","noi - net operating income","net operating income","net income","total capital expenses","total for capital improvements","total maintenance - capex"]);
   const makeRow=r=>{
     if(r.isSectionHeader){const ic=r.indentCount||0;const padLeft=ic>0?Math.min(10+ic*3,48):10;const cls=ic===0?"sec-hd":"sec-hd-inner";return `<tr class="${cls}"><td colspan="${totalCols}" style="padding-left:${padLeft}px">${escapeHtml(r.label)}</td></tr>`;}
     const lbl=r.label.toLowerCase().replace(/\s+/g," ").trim();
@@ -4240,7 +4240,7 @@ function parseQuarterFromExcel(buffer, currentQuarter) {
     const pC = v => { if(v===null||v===undefined||v==="") return 0; const n=parseFloat(String(v).replace(/[$,()]/g,"").trim()); return isNaN(n)?0:(String(v).includes("(")?-n:n); };
     // First pass: collect names that have a "Total X" counterpart — these are genuine section groupings.
     // e.g. "Total RENTS" → "rents" is a grouping header; "Prepaid Rent" has no Total row → it's a line item.
-    const SKIP_TOTALS = new Set(["total operating income","total income","total operating expense","total capital expenses","total for capital improvements","noi - net operating income","net operating income","net income"]);
+    const SKIP_TOTALS = new Set(["total operating income","total income","total operating expense","total capital expenses","total for capital improvements","total maintenance - capex","noi - net operating income","net operating income","net income"]);
     const sectionGroupNames = new Set();
     for(const row of rows.slice(headerRowIdx+1)){
       const lbl = String(row[0]||"").trim().toLowerCase().replace(/\s+/g," ");
@@ -4263,10 +4263,10 @@ function parseQuarterFromExcel(buffer, currentQuarter) {
       if(label==="total operating expense"||label==="total operating expenses"){totalExpense=quarterTotal;_teSet=true;}
       else if((label==="total expense"||label==="total expenses")&&!_teSet) totalExpense=quarterTotal;
       // noi calculated below from totalIncome - totalExpense to avoid Buildium labelling differences
-      if(label==="capital expenses"||label==="capital improvements") inCapex = true;
-      if(label==="total capital expenses"||label==="total for capital improvements") { capex=Math.abs(quarterTotal); inCapex=false; }
+      if(label==="capital expenses"||label==="capital improvements"||label==="maintenance - capex") inCapex = true;
+      if(label==="total capital expenses"||label==="total for capital improvements"||label==="total maintenance - capex") { capex=Math.abs(quarterTotal); inCapex=false; }
       if(label==="capital expenditures"&&quarterTotal!==0){ capex=Math.abs(quarterTotal); capexItems.push({name:rawLabel.trim(),amount:Math.abs(quarterTotal)}); }
-      if(inCapex && label && !label.startsWith("total") && quarterTotal!==0 && label!=="capital expenses" && label!=="capital improvements") {
+      if(inCapex && label && !label.startsWith("total") && quarterTotal!==0 && label!=="capital expenses" && label!=="capital improvements" && label!=="maintenance - capex") {
         capexItems.push({name:rawLabel.trim(), amount:Math.abs(quarterTotal)});
       }
       // Income statement rows for report display
@@ -4345,7 +4345,7 @@ function parsePriorQuarterFromExcel(buffer, currentQuarter) {
       else if((label==="total expense"||label==="total expenses")&&!_prevTeSet){prevExpense=colSum;inExpenseSection=false;}
       if(label==="noi - net operating income"||label==="net operating income"||label==="net income"||
          label.startsWith("net non-operating")){ if(label.includes("noi")||label==="net operating income") prevNoi=colSum; inExpenseSection=false; }
-      if(label==="total capital expenses"||label==="total for capital improvements") prevCapex=Math.abs(colSum);
+      if(label==="total capital expenses"||label==="total for capital improvements"||label==="total maintenance - capex") prevCapex=Math.abs(colSum);
       if(label==="capital expenditures"&&colSum!==0) prevCapex=Math.abs(colSum);
       // Individual line items only: not a "Total X" row, not a summary/NOI row
       if(inExpenseSection && !label.startsWith("total") && !EXPENSE_NARRATIVE_EXCLUDE.has(label) && Math.abs(colSum)>0){
