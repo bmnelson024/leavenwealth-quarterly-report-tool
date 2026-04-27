@@ -1016,18 +1016,16 @@ function selectSource(src){
   state.suppIncome = {sfhIncome:'', sfhExpenses:'', locIncome:''};
   state.bgChampionCustom = {commentary:'', charts:[]};
   state.step = 0;
-  // Investment-mode data only gets cleared when we're leaving investment mode
-  // (or going to the picker). Preserves work-in-progress when the user re-clicks
-  // the same source card.
-  if(src !== 'investment'){
-    state.invMetrics = null;
-    state.invReportHTML = null;
-    state.invProperties = [];
-    state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
-    state.invNarrativesEdited = false;
-    state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
-    state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''};
-  }
+  // Always clear investment identity fields — stale investmentName / invProperties
+  // from a prior report bleed into the new form if these are left intact.
+  state.investmentName = "";
+  state.invProperties = [];
+  state.invMetrics = null;
+  state.invReportHTML = null;
+  state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
+  state.invNarrativesEdited = false;
+  state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
+  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''};
   render();
 }
 function renderHome(){
