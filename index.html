@@ -4748,7 +4748,7 @@ function render(){
       </div>`;
       })()}
       ${fileRow("income","Income Statement (12-Month)","Upload a 12-month statement for prior quarter comparison",true)}
-      ${/brent\s*village/i.test(state.propertyName||'')?`${fileRow("balanceSheet","Balance Sheet <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Balance sheet as of end of quarter — adds a Balance Sheet page to the report",true)}`":""}
+      ${/brent\s*village/i.test(state.propertyName||'')?fileRow("balanceSheet","Balance Sheet <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Balance sheet as of end of quarter — adds a Balance Sheet page to the report",true):""}
       ${rrSection}
       ${fileRow("leasing","Leasing Agent Report","Jan 1 – Mar 24, 2026",'text')}
       ${fileRow("delinquency","Delinquent Tenants","Current",'text')}
