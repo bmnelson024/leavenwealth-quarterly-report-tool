@@ -2908,7 +2908,7 @@ function renderInvestmentStep0(){
     <div class="econ-box" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Investment Name</label>
         <input type="text" placeholder="e.g. MWP 4" value="${escapeHtml(state.investmentName)}"
-          oninput="state.investmentName=this.value"
+          oninput="state.investmentName=this.value;render()"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Quarter</label>
         <input type="text" placeholder="e.g. Q1 2026" value="${escapeHtml(state.currentQuarter)}"
