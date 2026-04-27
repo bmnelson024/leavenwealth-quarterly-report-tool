@@ -4035,6 +4035,13 @@ function onPropertyNameChange(val){
       if(el){el.focus();try{el.setSelectionRange(activeSel,activeSel);}catch(e){}}
     }
   };
+  // When the name changes, immediately clear assetFacts so the prior property's
+  // data doesn't bleed into the new one. The exact-match block below re-populates
+  // them right away if the new name has a saved record (e.g. returning to a known property).
+  if(val !== oldName && state.assetFacts){
+    state.assetFacts = null;
+    renderKeepFocus(); // re-render so the form fields visually clear
+  }
   // While the user is still typing we only check for an EXACT match.
   // Fuzzy matching runs on blur (onPropertyNameBlur) so that a partial name
   // like "Greenway" never cross-loads data from "Greenway 1" before the user
