@@ -1691,7 +1691,7 @@ async function rewriteWithClaude(kind){
     };
 
     if(isInv){
-      state.invNarratives = {income:clean.income, expenses:clean.expenses, outlook:clean.outlook};
+      state.invNarratives = {income:clean.income, expenses:clean.expenses, capex:clean.capex, outlook:clean.outlook};
       state.invNarrativesEdited = false;
     } else {
       state.narratives = clean;
@@ -2466,7 +2466,8 @@ function processInvestmentData(){
       _totalExpense += sfhExp;
       _noi += (sfhInc - sfhExp) + locInc;
     }
-    state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats};
+    const totalCapex=results.reduce((s,m)=>s+(m.capex||0),0);
+    state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats};
     // Only regenerate narratives if the user has NOT edited them. The
     // `invNarrativesEdited` flag is set by the textarea oninput handler;
     // for legacy saves that predate the flag we fall back to a content check.
@@ -2603,6 +2604,7 @@ ${(()=>{
     <tr><td>Net Operating Income</td><td>${prev?fmtWhole(prev.noi):"—"}</td><td>${fmtWhole(m.noi)}</td><td class="${prev&&m.noi>=prev.noi?"neg":"pos"}">${fmtChg(m.noi,prev?.noi??null)}</td></tr>
     <tr><td>Avg Physical Occupancy</td><td>${prev?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td><td class="${prev&&m.occupancy>=prev.occupancy?"neg":"pos"}">${fmtOccChg(m.occupancy,prev?.occupancy??null)}</td></tr>
     <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td><td class="${prev&&m.delinquency<=prev.delinquency?"neg":"pos"}">${prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—"}</td></tr>
+    ${m.capex?`<tr><td>Capital Expenditures</td><td>${prev&&prev.capex!=null?fmtWhole(prev.capex):"—"}</td><td>${fmtWhole(m.capex)}</td><td class="${prev&&prev.capex!=null&&m.capex<=prev.capex?"neg":"pos"}">${prev?.capex!=null?fmtChg(m.capex,prev.capex):"—"}</td></tr>`:""}
   </tbody></table>`;
   const page2=`<div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr}</div>
