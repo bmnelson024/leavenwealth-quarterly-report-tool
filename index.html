@@ -1691,7 +1691,8 @@ async function rewriteWithClaude(kind){
     };
 
     if(isInv){
-      state.invNarratives = {income:clean.income, expenses:clean.expenses, capex:clean.capex, outlook:clean.outlook};
+      // Preserve existing capex narrative if Claude didn't return one (edge function may not support it yet)
+      state.invNarratives = {income:clean.income, expenses:clean.expenses, capex:clean.capex||(state.invNarratives.capex||""), outlook:clean.outlook};
       state.invNarrativesEdited = false;
     } else {
       state.narratives = clean;
@@ -2910,7 +2911,7 @@ function renderInvestmentStep0(){
     <div class="econ-box" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Investment Name</label>
         <input type="text" placeholder="e.g. MWP 4" value="${escapeHtml(state.investmentName)}"
-          oninput="state.investmentName=this.value;clearTimeout(window._invNameTimer);window._invNameTimer=setTimeout(render,400)"
+          oninput="state.investmentName=this.value;var _s=document.getElementById('mwp5-suppincome');if(_s)_s.style.display=/mwp\s*5/i.test(this.value)?'block':'none'"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Quarter</label>
         <input type="text" placeholder="e.g. Q1 2026" value="${escapeHtml(state.currentQuarter)}"
@@ -2932,8 +2933,8 @@ function renderInvestmentStep0(){
           </div>
           <div style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px">
             <div style="font-size:12px;font-weight:600;color:#1a3a35;margin-bottom:8px">Or override manually:</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px">
-              ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"]].map(([k,l,ph])=>`<div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;gap:8px">
+              ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"],["capex","Capital Exp.","e.g. 18000"]].map(([k,l,ph])=>`<div>
                 <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">${l}</label>
                 <input type="number" placeholder="${ph}" value="${prev[k]||""}" oninput="state.invPrevMetrics=state.invPrevMetrics||{};state.invPrevMetrics['${k}']=parseFloat(this.value)||0"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
@@ -2956,8 +2957,8 @@ function renderInvestmentStep0(){
               <button onclick="state._showInvPrevPicker=false;render()" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer">Cancel</button>
               <span style="font-size:11px;color:#9ca3af">— or enter manually below —</span>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:10px">
-              ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"]].map(([k,l,ph])=>`<div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;gap:8px;margin-top:10px">
+              ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"],["capex","Capital Exp.","e.g. 18000"]].map(([k,l,ph])=>`<div>
                 <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">${l}</label>
                 <input type="number" placeholder="${ph}" oninput="(function(v){state.invPrevMetrics=state.invPrevMetrics||{totalIncome:0,totalExpense:0,noi:0,occupancy:0};state.invPrevMetrics['${k}']=parseFloat(v)||0;})(this.value)"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
@@ -3085,8 +3086,7 @@ function renderInvestmentStep0(){
       ${invChartRow("inv_lease_expirations","Lease Expirations by Month")}
       ${invChartRow("inv_rent_growth","Rent Growth & Market Rent")}
     </div>
-    ${/mwp\s*5/i.test(state.investmentName||'')?`
-    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:16px">
+    <div id="mwp5-suppincome" style="display:${/mwp\s*5/i.test(state.investmentName||'')?'block':'none'};background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:16px">
       <div style="font-weight:700;font-size:13px;color:#92400e;margin-bottom:10px">Additional Revenue Sources</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div>
@@ -3108,7 +3108,7 @@ function renderInvestmentStep0(){
             oninput="state.suppIncome.locIncome=this.value">
         </div>
       </div>
-    </div>`:""}
+    </div>
     <div class="btn-row" style="margin-top:16px">
       <button class="save-btn" onclick="saveProgress()">💾 Save</button>
       <button class="process-btn" style="flex:2;margin:0" ${anyPropWorkable?"":"disabled"} onclick="processInvestmentData()">Process Investment Data →</button>
