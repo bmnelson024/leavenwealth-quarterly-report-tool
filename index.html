@@ -431,7 +431,7 @@ function _makeDefaultState(){
       inv_utility:null, inv_lease_expirations:null, inv_rent_growth:null,
       inv_occupancy_rate:null, inv_occupancy_by_property:null
     },
-    invNarratives: { income:"", expenses:"", outlook:"" },
+    invNarratives: { income:"", expenses:"", capex:"", outlook:"" },
     invNarrativesEdited: false,
     invMetrics: null,
     invReportHTML: null,
@@ -623,7 +623,7 @@ function saveProgress(options){
     investmentName:state.investmentName||"",
     invProperties:savableInvProperties,
     invMetrics:state.invMetrics||null,
-    invNarratives:state.invNarratives||{income:"",expenses:"",outlook:""},
+    invNarratives:state.invNarratives||{income:"",expenses:"",capex:"",outlook:""},
     invLoan:state.invLoan||{principalInception:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
@@ -794,7 +794,7 @@ function loadSave(key){
       invProperties:(data.invProperties||[]),
       invCharts:{...emptyInvCharts,...(loadInvChartsForKey(key)||{})},
       invMetrics:data.invMetrics||null,
-      invNarratives:data.invNarratives||{income:"",expenses:"",outlook:""},
+      invNarratives:data.invNarratives||{income:"",expenses:"",capex:"",outlook:""},
       invLoan:data.invLoan||{principalInception:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
@@ -1001,7 +1001,7 @@ function selectSource(src){
     state.invMetrics = null;
     state.invReportHTML = null;
     state.invProperties = [];
-    state.invNarratives = {income:"",expenses:"",outlook:""};
+    state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
     state.invNarrativesEdited = false;
     state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
     state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''};
@@ -1639,7 +1639,9 @@ async function rewriteWithClaude(kind){
               // (e.g. "HVAC repairs at Park Place").
               expenseCategories: (p.expenseCategories||[]).slice()
                 .sort((a,b)=>Math.abs(b.amount||0)-Math.abs(a.amount||0))
-                .slice(0,4).map(c=>({name:c.name,amount:c.amount}))
+                .slice(0,4).map(c=>({name:c.name,amount:c.amount})),
+              capex: p.capex||0,
+              capexItems: (p.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount}))
             })),
           },
           prevMetrics: state.invPrevMetrics || null,
@@ -2380,7 +2382,13 @@ function parsePropertyMetrics(prop){
     : parseDelim(skipMetaRows(prop.files.rr3||"")).filter(isBuildiumUnitRow).length;
   const avgEconOcc=_econAvgStr(prop.econOcc);
   const remodels = prop.files.capexDetail ? parseCapexDetail(prop.files.capexDetail) : null;
-  return {name:prop.name,source:prop.source,occupancy,occ1,occ2,occ3,unitCount,totalIncome,totalExpense,noi,capex,capexItems,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:prop.source==='buildium'||!!prop.files.delinquency,newLeases,renewals,inquiries,applications,avgEconOcc,expenseCategories:propExpenseCats,remodels};
+  // If an AppFolio GL capex file was uploaded, replace generic T12 capex items with vendor-level detail
+  const _glCapex = (prop.source==='appfolio' && prop.files.capexDetail)
+    ? parseAFCapexGL(prop.files.capexDetail, state.currentQuarter||"")
+    : null;
+  const _capexItems = (_glCapex && _glCapex.capexItems.length > 0) ? _glCapex.capexItems : capexItems;
+  const _capex = (_glCapex && _glCapex.capexItems.length > 0 && !capex) ? _glCapex.totalCapex : capex;
+  return {name:prop.name,source:prop.source,occupancy,occ1,occ2,occ3,unitCount,totalIncome,totalExpense,noi,capex:_capex,capexItems:_capexItems,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:prop.source==='buildium'||!!prop.files.delinquency,newLeases,renewals,inquiries,applications,avgEconOcc,expenseCategories:propExpenseCats,remodels};
 }
 function processInvestmentData(){
   try{
@@ -2475,6 +2483,7 @@ function genInvestmentNarratives(m){
   return{
     income:`Total income across the ${n}-property portfolio for ${q} was ${fmtWhole(m.totalIncome)}, with a net operating income of ${fmtWhole(m.noi)}.${incChg!==null?` Income ${incChg>=0?"increased":"decreased"} ${Math.abs(incChg).toFixed(0)}% quarter over quarter.`:""} Weighted average physical occupancy stood at ${m.occupancy}%.${propIncomeDetail}`,
     expenses:`Total operating expenses for the portfolio were ${fmtWhole(m.totalExpense)} for ${q}.${expChg!==null?` Expenses ${expChg>=0?"increased":"decreased"} ${Math.abs(expChg).toFixed(0)}% quarter over quarter.`:""} The portfolio maintained disciplined cost management across all ${n} properties.${propExpenseDetail}`,
+    capex:(()=>{const pm=(m.propertyMetrics||[]).filter(p=>p.capex>0||((p.capexItems||[]).length>0));if(!pm.length) return"";return pm.map(p=>{const items=(p.capexItems||[]).slice(0,3).map(i=>escapeHtml(i.name)).join(", ");return`${p.name} recorded ${fmtWhole(p.capex)} in capital expenditures${items?` including ${items}`:""}.`;}).join(" ");})(),
     outlook:`The ${state.investmentName||"portfolio"} enters ${nextQtr(q)} with ${m.occupancy>=90?"strong":"stable"} occupancy at ${m.occupancy}% weighted average, supported by ${m.newLeases} new leases and ${m.renewals} renewals secured during ${q}.`
   };
 }
@@ -2574,7 +2583,7 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
 </div>
 <!-- PAGE 2: SUMMARY — narratives + QoQ comparison -->
 ${(()=>{
-  const summaryOverflow = (n.income.length + n.expenses.length + n.outlook.length) > 1200 || n.outlook.length > 500;
+  const summaryOverflow = (n.income.length + n.expenses.length + (n.capex||"").length + n.outlook.length) > 1200 || n.outlook.length > 500;
   const prevQtrLabel=calcPrevQuarterLabel(qtr)||"Prior Quarter";
   const tbl=`<table class="st"><thead><tr><th>Metric</th><th>${prevQtrLabel}</th><th>${qtr}</th><th>Change</th></tr></thead><tbody>
     <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td><td class="${prev&&m.totalIncome>=prev.totalIncome?"neg":"pos"}">${fmtChg(m.totalIncome,prev?.totalIncome??null)}</td></tr>
@@ -2588,6 +2597,7 @@ ${(()=>{
   ${tbl}
   <div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income)}</p></div>
   <div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses)}</p></div>
+  ${n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex)}</p></div>`:""}
   ${!summaryOverflow?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook)}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`;
@@ -3334,6 +3344,14 @@ function processBuildium() {
     const avgEconOcc=_econAvgStr(state.econOcc);
     // ── Capex Detail (optional) — scan for remodeled units ──────────────────
     const remodels = state.files.capexDetail ? parseCapexDetail(state.files.capexDetail) : null;
+    // ── AppFolio GL Capex (optional) — replace generic T12 items with vendor-level detail ──
+    const glCapex = state.files.capexDetail
+      ? parseAFCapexGL(state.files.capexDetail, state.currentQuarter||"")
+      : null;
+    if(glCapex && glCapex.capexItems.length > 0) {
+      capexItems.splice(0, capexItems.length, ...glCapex.capexItems);
+      if(!capex) capex = glCapex.totalCapex;
+    }
     // ── Balance Sheet (optional) — renders its own page in the report ───────
     const balanceSheet = state.files.balanceSheet ? parseBalanceSheet(state.files.balanceSheet) : null;
     if(state.files.balanceSheet && !balanceSheet){
@@ -3345,6 +3363,10 @@ function processBuildium() {
       state.narratives=genNarratives(state.metrics);
     } else {
       showToast("✓ Processed — your edited narratives preserved");
+      // If GL capex data was just loaded and the capex narrative is still empty, auto-fill it
+      if(glCapex && glCapex.capexItems.length > 0 && !state.narratives.capex) {
+        state.narratives.capex = genNarratives(state.metrics).capex;
+      }
     }
     state.step=1; state._savedThisStep=false; render();
   } catch(e){ showError("Error: "+e.message); }
@@ -3673,7 +3695,7 @@ function loadAllAFFiles(){
         {assigned.renewalSummary={file:f,asBuffer:'text'};return;}
       if(has(base,"delinquency","delinquent"))
         {assigned.delinquency={file:f,asBuffer:'text'};return;}
-      if(has(base,"capital expense","capex","transaction detail","capital expenditure"))
+      if(has(base,"capital expense","capex","transaction detail","capital expenditure","general ledger"))
         {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
       unmatched.push(f.name);
     });
@@ -4220,6 +4242,141 @@ function parseBalanceSheet(fileData){
     return null;
   }
 }
+// parseAFCapexGL: Parses an AppFolio "General Ledger" export to extract Capital
+// Expenditure transactions for a specific quarter. The file is filtered to the
+// requested quarter and grouped by vendor so narratives can cite real contractor
+// names rather than generic account category labels.
+//
+// File structure (AppFolio GL format):
+//   Row ~11: Column headers — Property Name | Unit | GL Account | Date | Debit | Credit | Balance | Payee / Payer | Description | Remarks | ...
+//   Sections begin with any "Capital Expenditures" GL account in col A (e.g. "8020 - Capital Expenditures")
+//   Data rows: col A = property name, col D = date, col E = debit, col F = credit
+//              col H = Payee/Payer (vendor for direct checks), col I = Description, col J = Remarks
+//   Summary rows ("Starting Balance", "Net Change") are skipped without ending the section.
+//   A GL can include multiple Capital Expenditures accounts — all are accumulated.
+//
+// Returns {capexItems:[{name,amount}], totalCapex} or null if not parseable/no data.
+function parseAFCapexGL(fileData, quarterStr) {
+  if(!fileData) return null;
+  try {
+    let rows = [];
+    if(fileData instanceof ArrayBuffer) {
+      const wb = XLSX.read(fileData, {type:"array", cellDates:true});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
+    } else {
+      return null; // GL files are always Excel
+    }
+    if(!rows.length) return null;
+
+    // Detect AF GL format: look for header row with "GL Account" and "Payee"
+    let headerRowIdx = -1;
+    let colDate=-1, colDebit=-1, colCredit=-1, colPayee=-1, colDesc=-1, colRemarks=-1;
+    for(let i=0; i<Math.min(20, rows.length); i++) {
+      const cells = (rows[i]||[]).map(c=>String(c==null?"":c).trim().toLowerCase());
+      const hasGLAccount = cells.some(c=>c==="gl account");
+      const hasPayee = cells.some(c=>c.includes("payee"));
+      if(hasGLAccount || hasPayee) {
+        headerRowIdx = i;
+        colDate    = cells.findIndex(c=>c==="date");
+        colDebit   = cells.findIndex(c=>c==="debit");
+        colCredit  = cells.findIndex(c=>c==="credit");
+        colPayee   = cells.findIndex(c=>c.includes("payee"));
+        colDesc    = cells.findIndex(c=>c==="description");
+        colRemarks = cells.findIndex(c=>c==="remarks");
+        break;
+      }
+    }
+    if(headerRowIdx < 0 || colDate < 0 || colDebit < 0) return null;
+
+    // Parse quarter date range from string like "Q1 2026" or "Q4 2025"
+    const qMatch = quarterStr.match(/Q(\d)\s+(\d{4})/i);
+    if(!qMatch) return null;
+    const qNum = parseInt(qMatch[1]);
+    const qYear = parseInt(qMatch[2]);
+    const qStartMonth = (qNum-1)*3; // 0-indexed month
+    const qStart = new Date(qYear, qStartMonth, 1);
+    const qEnd   = new Date(qYear, qStartMonth+3, 0, 23, 59, 59);
+
+    // Walk rows, accumulating transactions across ALL Capital Expenditures sections
+    let inCapexSection = false;
+    const vendorMap = new Map(); // vendor → net amount
+
+    for(let i=headerRowIdx+1; i<rows.length; i++) {
+      const row = rows[i] || [];
+      const col0 = String(row[0]==null?"":row[0]).trim();
+
+      // Section header detection: col A has text, date/debit/credit cols are null
+      const noData = row[colDate]==null && row[colDebit]==null && row[colCredit]==null;
+      if(col0 && noData) {
+        // Always skip pure summary rows — never let them end the section
+        if(/^(starting\s*balance|net\s*change|ending\s*balance|total)$/i.test(col0)) continue;
+        // GL account section header
+        if(/capital\s*expend/i.test(col0)) {
+          inCapexSection = true; // Enter (or stay in) a capex account — accumulate across all capex accts
+        } else if(inCapexSection) {
+          break; // Hit a different (non-capex) GL account section — done
+        }
+        continue;
+      }
+
+      if(!inCapexSection) continue;
+
+      // Parse date — SheetJS cellDates:true returns Date objects for date cells
+      const rawDate = row[colDate];
+      if(rawDate == null) continue;
+      let txDate;
+      if(rawDate instanceof Date) {
+        txDate = rawDate;
+      } else if(typeof rawDate === 'number') {
+        txDate = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
+      } else {
+        txDate = new Date(String(rawDate));
+      }
+      if(isNaN(txDate.getTime())) continue;
+
+      // Filter to the selected quarter
+      if(txDate < qStart || txDate > qEnd) continue;
+
+      const debit  = parseCur(row[colDebit])  || 0;
+      const credit = parseCur(row[colCredit]) || 0;
+      const net = debit - credit;
+      if(net === 0) continue;
+
+      // Determine the best vendor label for this transaction:
+      //   1. Payee/Payer (direct checks — most reliable)
+      //   2. Remarks when it's an actual vendor name, not a reclass label
+      //   3. Generic "Unit Turn Materials & Labor" for all other journal-entry reclasses
+      const payeeVal   = String(colPayee>=0&&row[colPayee]!=null   ? row[colPayee]   : "").trim();
+      const remarksVal = String(colRemarks>=0&&row[colRemarks]!=null? row[colRemarks] : "").trim();
+      const isReclass  = /^reclass/i.test(remarksVal) || /^switch\b/i.test(remarksVal);
+      let vendor;
+      if(payeeVal) {
+        vendor = payeeVal;
+      } else if(remarksVal && !isReclass) {
+        vendor = remarksVal; // e.g. "BCS Boiler Chiller Systems", "All Aluminum Window Company"
+      } else {
+        vendor = "Unit Turn Materials & Labor";
+      }
+
+      vendorMap.set(vendor, (vendorMap.get(vendor)||0) + net);
+    }
+
+    if(!vendorMap.size) return null;
+
+    const capexItems = [...vendorMap.entries()]
+      .filter(([,amt]) => amt > 0)
+      .sort((a,b) => b[1]-a[1])
+      .map(([name, amount]) => ({name, amount}));
+
+    if(!capexItems.length) return null;
+    const totalCapex = capexItems.reduce((s,i)=>s+i.amount, 0);
+    return {capexItems, totalCapex};
+  } catch(e) {
+    console.warn('parseAFCapexGL failed:', e);
+    return null;
+  }
+}
 function parseCapexDetail(fileData) {
   if(!fileData) return null;
   try {
@@ -4510,7 +4667,7 @@ function render(){
             <button style="font-size:11px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1px solid #c8e6de;border-radius:5px;padding:5px 11px;cursor:pointer;white-space:nowrap;font-family:Inter,sans-serif" onclick="if(confirm('Overwrite current narratives with freshly generated text?')){state.invNarratives=genInvestmentNarratives(state.invMetrics);render()}" title="Re-run template narrative generator">↺ Template</button>
           </div>
         </div>
-        ${[["income","Income & Occupancy"],["expenses","Expenses"],["outlook","Outlook"]].map(([k,l])=>`
+        ${[["income","Income & Occupancy"],["expenses","Expenses"],["capex","Capital Expenditures"],["outlook","Outlook"]].map(([k,l])=>`
           <div><span class="narrative-label">${l}<span class="auto-badge">AUTO</span></span>
           <textarea id="inv-narr-${k}" oninput="state.invNarratives['${k}']=this.value;state.invNarrativesEdited=true">${escapeHtml(state.invNarratives[k])}</textarea></div>`).join("")}
         <div class="charts-info">📊 <strong>${chartsN}/12 charts uploaded</strong> — ${chartsN===12?"All charts ready!":"Missing charts will show placeholders in the report."}</div>
