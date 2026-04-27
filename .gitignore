@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Backup HTML files
+*_backup*.html
+
+# Context / notes / prompt docs
+*.md
+*.sh
+
+# Scratch / duplicate files
+appfolio_tool.html
+/index.ts
