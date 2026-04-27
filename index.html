@@ -2689,6 +2689,34 @@ ${(()=>{
 </div>`:"";
   return page2+page2b;
 })()}
+${(()=>{
+  if(!/bg\s*champion/i.test(invName||'')) return '';
+  const bgc=state.bgChampionCustom||{};
+  const commentary=(bgc.commentary||'').trim();
+  const charts=Array.isArray(bgc.charts)?bgc.charts:[];
+  if(!commentary && charts.length===0) return '';
+  // Preserve the user's line breaks (numbered lists, paragraphs, etc.)
+  const commentaryHtml=escapeHtml(commentary).replace(/\n/g,'<br>');
+  const pages=[];
+  // First page: commentary + first 2 charts
+  const firstCharts=charts.slice(0,2);
+  pages.push(`<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Additional Commentary — ${qtr}</div>
+  ${commentary?`<div class="ns"><p class="nt">${commentaryHtml}</p></div>`:''}
+  ${firstCharts.map((src,i)=>`<div style="margin-bottom:16px;page-break-inside:avoid;break-inside:avoid"><img src="${src}" alt="Chart ${i+1}" style="width:100%;height:auto;display:block;border-radius:6px;border:1px solid #c8e6de;"/></div>`).join('')}
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`);
+  // Remaining charts, 2 per page
+  for(let i=2;i<charts.length;i+=2){
+    const pair=charts.slice(i,i+2);
+    pages.push(`<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Additional Commentary — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
+  ${pair.map((src,j)=>`<div style="margin-bottom:16px;page-break-inside:avoid;break-inside:avoid"><img src="${src}" alt="Chart ${i+j+1}" style="width:100%;height:auto;display:block;border-radius:6px;border:1px solid #c8e6de;"/></div>`).join('')}
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`);
+  }
+  return pages.join('\n');
+})()}
 <!-- PAGE 3: SNAPSHOT + LOAN -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Portfolio Snapshot — ${qtr}</div>
@@ -2829,32 +2857,6 @@ ${sec.leasingSection?`
   </div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:""}
-${(()=>{
-  if(!/bg\s*champion/i.test(invName||'')) return '';
-  const bgc=state.bgChampionCustom||{};
-  const commentary=(bgc.commentary||'').trim();
-  const charts=Array.isArray(bgc.charts)?bgc.charts:[];
-  if(!commentary && charts.length===0) return '';
-  const pages=[];
-  // First page: commentary + first 2 charts
-  const firstCharts=charts.slice(0,2);
-  pages.push(`<div class="page">
-  <div class="pn">${inv}</div><div class="sh">Additional Commentary — ${qtr}</div>
-  ${commentary?`<div class="ns"><p class="nt">${escapeHtml(commentary)}</p></div>`:''}
-  ${firstCharts.map((src,i)=>`<div style="margin-bottom:16px;page-break-inside:avoid;break-inside:avoid"><img src="${src}" alt="Chart ${i+1}" style="width:100%;height:auto;display:block;border-radius:6px;border:1px solid #c8e6de;"/></div>`).join('')}
-  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
-</div>`);
-  // Remaining charts, 2 per page
-  for(let i=2;i<charts.length;i+=2){
-    const pair=charts.slice(i,i+2);
-    pages.push(`<div class="page">
-  <div class="pn">${inv}</div><div class="sh">Additional Commentary — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
-  ${pair.map((src,j)=>`<div style="margin-bottom:16px;page-break-inside:avoid;break-inside:avoid"><img src="${src}" alt="Chart ${i+j+1}" style="width:100%;height:auto;display:block;border-radius:6px;border:1px solid #c8e6de;"/></div>`).join('')}
-  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
-</div>`);
-  }
-  return pages.join('\n');
-})()}
 <!-- LAST PAGE: FOOTNOTES -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Footnotes</div>
