@@ -4133,12 +4133,13 @@ function tryAutoLoadPriorOccupancy(){
 function onPropertyNameChange(val){
   const oldName=state.propertyName;
   state.propertyName=val;
-  // IMPORTANT: do NOT save the photo under intermediate keys while the user is typing.
-  // Saving on every keystroke creates garbage db entries like "lw_photo_t", "lw_photo_th",
-  // etc. that later get matched by exact-lookup when a new report is started.
-  // Photo orphan-protection is handled in onPropertyNameBlur once the name is final.
+  // IMPORTANT: zero data lookups during typing.
+  // Even a 4-char threshold like "The G" can match garbage db keys that old sessions
+  // wrote for intermediate keystrokes (e.g. "lw_photo_the_g" from editing "The Greenway 1").
+  // All photo / asset-facts / occupancy lookups are deferred entirely to onPropertyNameBlur,
+  // which fires only once the user has finished typing and clicked away from the field.
 
-  // Helper: re-render while restoring focus to whatever field was active
+  // Helper: re-render while restoring focus to whatever field was active.
   const renderKeepFocus=()=>{
     const activeField=document.activeElement?document.activeElement.getAttribute('data-field'):null;
     const activeSel=document.activeElement?document.activeElement.selectionStart:null;
@@ -4148,54 +4149,44 @@ function onPropertyNameChange(val){
       if(el){el.focus();try{el.setSelectionRange(activeSel,activeSel);}catch(e){}}
     }
   };
-  // When the name changes, immediately clear assetFacts so the prior property's
-  // data doesn't bleed into the new one.
+  // Clear stale facts immediately when the name changes so the old property's
+  // data doesn't linger while the user types the new name.
   if(val !== oldName && state.assetFacts){
     state.assetFacts = null;
     renderKeepFocus();
   }
-  // Only attempt exact-match lookups once the user has typed a name whose
-  // normalized form has at least 4 non-underscore characters. This prevents
-  // partial names like "t", "the", "the_" from matching short garbage keys
-  // that may have accumulated in the db from previous editing sessions.
-  const normAlphaLen=normalizePropertyKey(val).replace(/_/g,'').length;
-  if(normAlphaLen>=4){
-    if(!state.propertyPhoto){
-      const exactPhoto=dbGet(photoStorageKey(val));
-      if(exactPhoto){ state.propertyPhoto=exactPhoto; renderKeepFocus(); }
-    }
-    if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
-      const exactFactsRaw=dbGet(assetFactsKey(val));
-      if(exactFactsRaw){ try{ state.assetFacts=JSON.parse(exactFactsRaw); renderKeepFocus(); }catch(e){} }
-    }
-  }
-  // Auto-load prior quarter occupancy from a saved report (uses exact save key — safe while typing)
-  if(!state.prevOccupancyInput){ tryAutoLoadPriorOccupancy(); }
 }
 // Runs when the property name field loses focus. At this point the user has
-// finished typing the full name, so fuzzy matching and photo orphan-protection are safe.
+// finished typing the full name, so all lookups are safe.
 function onPropertyNameBlur(val){
   if(!val) return;
+  // Require a minimum of 6 meaningful (non-underscore) characters before attempting
+  // any lookup. This prevents partial names like "The G" (4 chars) from matching
+  // garbage db keys that were written by older sessions during intermediate keystrokes.
+  const normAlphaLen=normalizePropertyKey(val).replace(/_/g,'').length;
+  if(normAlphaLen<6) return;
   // Save the photo under the final name so it isn't orphaned if the user renamed
-  // the property (e.g. "Greenway 1" → "The Greenway 1"). This is intentionally
-  // deferred from onPropertyNameChange to avoid writing garbage short-name keys.
+  // the property (e.g. "Greenway 1" → "The Greenway 1"). Deferred from onPropertyNameChange
+  // to avoid writing garbage short-name keys.
   if(state.propertyPhoto) savePhotoForProperty(val, state.propertyPhoto);
   if(!state.propertyPhoto){
-    const normAlphaLen=normalizePropertyKey(val).replace(/_/g,'').length;
-    // For names long enough to have triggered the exact lookup in onPropertyNameChange,
-    // skip the redundant exact pass and go straight to the fuzzy scan.
-    const saved = normAlphaLen>=4 ? _fuzzyPhotoScan(val) : loadPhotoForProperty(val);
+    // Full exact + fuzzy lookup now that the name is complete.
+    const saved=loadPhotoForProperty(val);
     if(saved){ state.propertyPhoto=saved; render(); }
   }
   if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
     const savedFacts=loadAssetFactsForProperty(val);
     if(savedFacts){ state.assetFacts=savedFacts; render(); }
   }
+  // Auto-load prior quarter occupancy once we have the full property name.
+  if(!state.prevOccupancyInput){ tryAutoLoadPriorOccupancy(); }
 }
 // One-time cleanup: removes garbage "lw_photo_*" and "lw_assetfacts_*" db entries
-// whose normalized suffix is too short to be a real property name (≤3 non-underscore
+// whose normalized suffix is too short to be a real property name (≤5 non-underscore
 // chars). These accumulate when intermediate keystrokes erroneously triggered
-// savePhotoForProperty — e.g. typing "T" → "lw_photo_t" → wrongly matches later.
+// savePhotoForProperty — e.g. "the_g" (4 chars) from typing "The Greenway 1".
+// Threshold is 5 so that fragments up to "The Gr" / "bgfla" are purged, while
+// real names of 6+ chars (e.g. "bgflats"=7, "thegreenway1"=12) are left intact.
 function cleanupGarbageDbKeys(){
   try{
     for(const k of dbKeys()){
@@ -4203,7 +4194,7 @@ function cleanupGarbageDbKeys(){
       const prefix=k.startsWith('lw_photo_')?'lw_photo_':'lw_assetfacts_';
       const suffix=k.slice(prefix.length);
       const alphaLen=suffix.replace(/_/g,'').length;
-      if(alphaLen<=3) dbRemove(k);
+      if(alphaLen<=5) dbRemove(k);
     }
   }catch(e){ console.warn('cleanupGarbageDbKeys failed:',e); }
 }
