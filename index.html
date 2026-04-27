@@ -2556,7 +2556,7 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   // never an odd layout like 5+1.  For 1–2 photos fall back to a centred row.
   const thumbW=190;
   const thumbH=Math.round(thumbW*0.65);
-  const photoStrip=n_photos>0?`<div style="margin-top:36px;display:grid;grid-template-columns:repeat(${n_photos<=2?n_photos:3},${thumbW}px);gap:16px;justify-content:center;max-width:660px">
+  const photoStrip=n_photos>0?`<div style="margin-top:36px;display:grid;grid-template-columns:repeat(${n_photos<=2?n_photos:n_photos===4?2:3},${thumbW}px);gap:16px;justify-content:center;max-width:660px">
     ${propPhotos.map(p=>`<div style="text-align:center">
       ${p.photo
         ?`<img src="${p.photo}" style="width:${thumbW}px;height:${thumbH}px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,196,140,0.4);display:block"/>`
