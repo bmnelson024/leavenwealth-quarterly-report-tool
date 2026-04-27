@@ -4035,18 +4035,34 @@ function onPropertyNameChange(val){
       if(el){el.focus();try{el.setSelectionRange(activeSel,activeSel);}catch(e){}}
     }
   };
-  // Auto-load saved photo for this property if none currently set
+  // While the user is still typing we only check for an EXACT match.
+  // Fuzzy matching runs on blur (onPropertyNameBlur) so that a partial name
+  // like "Greenway" never cross-loads data from "Greenway 1" before the user
+  // has finished typing "Greenway 2".
+  if(!state.propertyPhoto){
+    const exactPhoto=dbGet(photoStorageKey(val));
+    if(exactPhoto){ state.propertyPhoto=exactPhoto; renderKeepFocus(); }
+  }
+  if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
+    const exactFactsRaw=dbGet(assetFactsKey(val));
+    if(exactFactsRaw){ try{ state.assetFacts=JSON.parse(exactFactsRaw); renderKeepFocus(); }catch(e){} }
+  }
+  // Auto-load prior quarter occupancy from a saved report (uses exact save key — safe while typing)
+  if(!state.prevOccupancyInput){ tryAutoLoadPriorOccupancy(); }
+}
+// Runs when the property name field loses focus. At this point the user has
+// finished typing the full name, so it is safe to run the fuzzy fallback that
+// handles renamed properties (e.g. "Oak Park" → "Oak Park Apts").
+function onPropertyNameBlur(val){
+  if(!val) return;
   if(!state.propertyPhoto){
     const saved=loadPhotoForProperty(val);
-    if(saved){ state.propertyPhoto=saved; renderKeepFocus(); }
+    if(saved){ state.propertyPhoto=saved; render(); }
   }
-  // Auto-load saved asset facts for this property
   if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
     const savedFacts=loadAssetFactsForProperty(val);
-    if(savedFacts){ state.assetFacts=savedFacts; renderKeepFocus(); }
+    if(savedFacts){ state.assetFacts=savedFacts; render(); }
   }
-  // Auto-load prior quarter occupancy from a saved report
-  if(!state.prevOccupancyInput){ tryAutoLoadPriorOccupancy(); }
 }
 // ─── ASSET FACTS PERSISTENCE ──────────────────────────────────────────────────
 function assetFactsKey(name){ return "lw_assetfacts_" + normalizePropertyKey(name); }
@@ -4899,7 +4915,7 @@ function render(){
       </div>
       <div class="section-label">Report Details</div>
       <div class="econ-box" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Property Name</label><input data-field="propertyName" type="text" placeholder="e.g. Park Place Apartments" value="${escapeHtml(state.propertyName)}" oninput="onPropertyNameChange(this.value)" style="width:100%;padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none;box-sizing:border-box"/></div>
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Property Name</label><input data-field="propertyName" type="text" placeholder="e.g. Park Place Apartments" value="${escapeHtml(state.propertyName)}" oninput="onPropertyNameChange(this.value)" onblur="onPropertyNameBlur(this.value)" style="width:100%;padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none;box-sizing:border-box"/></div>
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Quarter</label><input data-field="currentQuarter" type="text" placeholder="e.g. Q1 2026" value="${escapeHtml(state.currentQuarter)}" oninput="setCurrentQuarter(this.value)" onblur="blurNormalizeQuarter()" style="width:100%;padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none;box-sizing:border-box"/></div>
       </div>
       <div class="section-label" style="margin-top:12px">Asset Facts <span style="font-weight:400;font-size:11px;color:#5a8070">— saved automatically per property</span></div>
