@@ -1677,8 +1677,10 @@ async function rewriteWithClaude(kind){
             capex: metrics.capex, cashOnHand: metrics.cashOnHand,
             capexItems: (metrics.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount})),
             expenseCategories: (metrics.expenseCategories||[]).map(c=>({name:c.name,amount:c.amount})),
+            // capexDetail provides qualitative project context only.
+            // totalCapex is intentionally excluded — use metrics.capex (above) for the quarter total.
+            // capexDetail spans the full uploaded file and is NOT filtered to this quarter.
             capexDetail: metrics.remodels ? {
-              totalCapex: metrics.remodels.totalCapex,
               remodelCount: metrics.remodels.remodelCount,
               remodelUnits: metrics.remodels.remodelUnits,
               topTransactions: (metrics.remodels.topTransactions||[]).slice(0,8),
