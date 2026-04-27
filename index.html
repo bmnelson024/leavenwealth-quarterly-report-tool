@@ -625,7 +625,7 @@ function saveProgress(options){
     invProperties:savableInvProperties,
     invMetrics:state.invMetrics||null,
     invNarratives:state.invNarratives||{income:"",expenses:"",capex:"",outlook:""},
-    invLoan:state.invLoan||{principalInception:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
+    invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
     businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''},
@@ -797,7 +797,7 @@ function loadSave(key){
       invCharts:{...emptyInvCharts,...(loadInvChartsForKey(key)||{})},
       invMetrics:data.invMetrics||null,
       invNarratives:data.invNarratives||{income:"",expenses:"",capex:"",outlook:""},
-      invLoan:data.invLoan||{principalInception:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
+      invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
       businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''},
@@ -986,7 +986,7 @@ function selectSource(src){
   state.source = src || null;
   // Always reset these investment-specific fields — stale values cause incorrect
   // prior-quarter labels and loan data to bleed across sessions.
-  state.invLoan = {principalInception:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""};
+  state.invLoan = {principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""};
   state.invPrevMetrics = null;
   // Single-property files are always reset — they cannot leak across sources.
   state.files = {income:null,rr1:null,rr2:null,rr3:null,leasing:null,leasingSummary:null,renewalSummary:null,delinquency:null,rentEngine:null,capexDetail:null,balanceSheet:null};
@@ -1612,6 +1612,20 @@ const genNarratives = m => {
 // as a server-side secret and asks Claude Sonnet 4.6 to rewrite the narrative
 // paragraphs from the same metrics the template uses. On failure, leaves the
 // existing narratives (template-generated or user-edited) untouched.
+// After Claude rewrites investment narratives, substitute any "N-unit property"
+// references with the actual property name so generic descriptions don't appear.
+function fixInvPropertyNameRefs(text, propertyMetrics){
+  if(!text || !propertyMetrics) return text;
+  let result = text;
+  for(const p of propertyMetrics){
+    if(!p.name || !p.unitCount) continue;
+    const n = p.unitCount;
+    // Match: "the 23-unit property", "a 23-unit property", "23-unit property", etc.
+    const pat = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\s+propert(?:y|ies)\\b`, 'gi');
+    result = result.replace(pat, p.name);
+  }
+  return result;
+}
 async function rewriteWithClaude(kind){
   const isInv = kind === 'investment';
   const metrics = isInv ? state.invMetrics : state.metrics;
@@ -1691,6 +1705,11 @@ async function rewriteWithClaude(kind){
     };
 
     if(isInv){
+      // Fix any "N-unit property" references Claude used instead of actual property names
+      const _pm = (metrics.propertyMetrics||[]);
+      clean.income   = fixInvPropertyNameRefs(clean.income,   _pm);
+      clean.expenses = fixInvPropertyNameRefs(clean.expenses, _pm);
+      clean.outlook  = fixInvPropertyNameRefs(clean.outlook,  _pm);
       // Preserve existing capex narrative if Claude didn't return one (edge function may not support it yet)
       state.invNarratives = {income:clean.income, expenses:clean.expenses, capex:clean.capex||(state.invNarratives.capex||""), outlook:clean.outlook};
       state.invNarrativesEdited = false;
@@ -2497,7 +2516,7 @@ function genInvestmentNarratives(m){
   return{
     income:`Total income across the ${n}-property portfolio for ${q} was ${fmtWhole(m.totalIncome)}, with a net operating income of ${fmtWhole(m.noi)}.${incChg!==null?` Income ${incChg>=0?"increased":"decreased"} ${Math.abs(incChg).toFixed(0)}% quarter over quarter.`:""} Weighted average physical occupancy stood at ${m.occupancy}%.${propIncomeDetail}`,
     expenses:`Total operating expenses for the portfolio were ${fmtWhole(m.totalExpense)} for ${q}.${expChg!==null?` Expenses ${expChg>=0?"increased":"decreased"} ${Math.abs(expChg).toFixed(0)}% quarter over quarter.`:""} The portfolio maintained disciplined cost management across all ${n} properties.${propExpenseDetail}`,
-    capex:(()=>{const pm=(m.propertyMetrics||[]).filter(p=>p.capex>0||((p.capexItems||[]).length>0));if(!pm.length) return"";return pm.map(p=>{const items=(p.capexItems||[]).slice(0,3).map(i=>escapeHtml(i.name)).join(", ");return`${p.name} recorded ${fmtWhole(p.capex)} in capital expenditures${items?` including ${items}`:""}.`;}).join(" ");})(),
+    capex:(()=>{const pm=(m.propertyMetrics||[]).filter(p=>p.capex>0||((p.capexItems||[]).length>0));if(!pm.length) return"";return pm.map(p=>{const items=(p.capexItems||[]).slice(0,3).map(i=>i.name).join(", ");return`${p.name} recorded ${fmtWhole(p.capex)} in capital expenditures${items?` including ${items}`:""}.`;}).join(" ");})(),
     outlook:`The ${state.investmentName||"portfolio"} enters ${nextQtr(q)} with ${m.occupancy>=90?"strong":"stable"} occupancy at ${m.occupancy}% weighted average, supported by ${m.newLeases} new leases and ${m.renewals} renewals secured during ${q}.`
   };
 }
@@ -2960,7 +2979,7 @@ function renderInvestmentStep0(){
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;gap:8px;margin-top:10px">
               ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"],["capex","Capital Exp.","e.g. 18000"]].map(([k,l,ph])=>`<div>
                 <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">${l}</label>
-                <input type="number" placeholder="${ph}" oninput="(function(v){state.invPrevMetrics=state.invPrevMetrics||{totalIncome:0,totalExpense:0,noi:0,occupancy:0};state.invPrevMetrics['${k}']=parseFloat(v)||0;})(this.value)"
+                <input type="number" placeholder="${ph}" oninput="(function(v){state.invPrevMetrics=state.invPrevMetrics||{totalIncome:0,totalExpense:0,noi:0,occupancy:0,delinquency:0,capex:0};state.invPrevMetrics['${k}']=parseFloat(v)||0;})(this.value)"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
               </div>`).join("")}
             </div>
@@ -2982,7 +3001,7 @@ function renderInvestmentStep0(){
           oninput="state.invLoan.principalInception=this.value"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Prior Year-End Date (for label)</label>
-        <input type="text" placeholder="e.g. 12/31/2024" value="${state.invLoan.principalInceptionDate}"
+        <input type="text" placeholder="e.g. 12/31/2024" value="${state.invLoan.principalInceptionDate||""}"
           oninput="state.invLoan.principalInceptionDate=this.value"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Current)</label>
@@ -3256,7 +3275,7 @@ function processDataAppFolio() {
       const rawPrevOcc = state.prevOccupancyInput ? state.prevOccupancyInput.replace(/[^0-9.]/g,"") : "";
       const prevOccBu2 = rawPrevOcc ? Math.round(parseFloat(rawPrevOcc)) : (state.prevMetrics ? state.prevMetrics.occupancy : 0);
       if(state.prevMetrics) state.prevMetrics.occupancy = prevOccBu2;
-      else if(prevOccBu2) state.prevMetrics = {occupancy:prevOccBu2, income:0, expenses:0, noi:0, capex:0};
+      else if(prevOccBu2) state.prevMetrics = {occupancy:prevOccBu2, income:0, expenses:0, noi:0, capex:0, expenseCategories:[]};
     }
     // ── Economic Occupancy ───────────────────────────────────────────────────
     const avgEconOcc = _econAvgStr(state.econOcc);
@@ -3377,7 +3396,7 @@ function processBuildium() {
       const _rawOccBu2 = state.prevOccupancyInput ? state.prevOccupancyInput.replace(/[^0-9.]/g,"") : "";
       const prevOccBu = _rawOccBu2 ? Math.round(parseFloat(_rawOccBu2))||0 : (state.prevMetrics ? state.prevMetrics.occupancy : 0);
       if(state.prevMetrics) state.prevMetrics.occupancy = prevOccBu;
-      else if(prevOccBu) state.prevMetrics = {occupancy:prevOccBu, income:0, expenses:0, noi:0, capex:0};
+      else if(prevOccBu) state.prevMetrics = {occupancy:prevOccBu, income:0, expenses:0, noi:0, capex:0, expenseCategories:[]};
     }
     const avgEconOcc=_econAvgStr(state.econOcc);
     // ── Capex Detail (optional) — scan for remodeled units ──────────────────
@@ -4334,7 +4353,7 @@ function parseAFCapexGL(fileData, quarterStr) {
     const qYear = parseInt(qMatch[2]);
     const qStartMonth = (qNum-1)*3; // 0-indexed month
     const qStart = new Date(qYear, qStartMonth, 1);
-    const qEnd   = new Date(qYear, qStartMonth+3, 0, 23, 59, 59);
+    const qEnd   = new Date(qYear, qStartMonth+3, 0, 23, 59, 59, 999);
 
     // Walk rows, accumulating transactions across ALL Capital Expenditures sections
     let inCapexSection = false;
@@ -4352,8 +4371,8 @@ function parseAFCapexGL(fileData, quarterStr) {
         // GL account section header
         if(/capital\s*expend/i.test(col0)) {
           inCapexSection = true; // Enter (or stay in) a capex account — accumulate across all capex accts
-        } else if(inCapexSection) {
-          break; // Hit a different (non-capex) GL account section — done
+        } else {
+          inCapexSection = false; // Not a capex account — keep scanning in case more capex accounts appear later
         }
         continue;
       }
