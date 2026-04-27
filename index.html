@@ -1935,10 +1935,10 @@ ${(()=>{
   const page2=`<div class="page">
   <div class="pn">${prop}</div><div class="sh">Summary</div>
   ${showQoQ?tbl:""}
-  ${n.income?`<div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income)}</p></div>`:""}
-  ${n.expenses?`<div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses)}</p></div>`:""}
-  ${!capexToP2 && n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex)}</p></div>`:""}
-  ${!outlookToP2 && n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook)}</p></div>`:""}
+  ${n.income?`<div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${n.expenses?`<div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${!capexToP2 && n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${!outlookToP2 && n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${prop}</div>
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
   <div class="pgn">${pg.v()}</div>
@@ -1946,8 +1946,8 @@ ${(()=>{
   const needPage2 = (capexToP2 && n.capex) || (outlookToP2 && n.outlook);
   const page2b=needPage2?`<div class="page">
   <div class="pn">${prop}</div><div class="sh">Summary <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
-  ${capexToP2 && n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex)}</p></div>`:""}
-  ${outlookToP2 && n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook)}</p></div>`:""}
+  ${capexToP2 && n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${outlookToP2 && n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${prop}</div>
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
   <div class="pgn">${pg.v()}</div>
@@ -2674,17 +2674,17 @@ ${(()=>{
   const page2=`<div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr}</div>
   ${tbl}
-  <div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income)}</p></div>
-  <div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses)}</p></div>
-  ${n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex)}</p></div>`:""}
-  ${!summaryOverflow?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook)}</p></div>`:""}
+  <div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income).replace(/\n/g,'<br>')}</p></div>
+  <div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses).replace(/\n/g,'<br>')}</p></div>
+  ${n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${!summaryOverflow?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`;
   const page2b=summaryOverflow?`
 <!-- PAGE 2b: SUMMARY CONTINUED — outlook -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
-  <div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook)}</p></div>
+  <div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:"";
   return page2+page2b;
