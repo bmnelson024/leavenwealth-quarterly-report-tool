@@ -2845,6 +2845,79 @@ function genInvestmentNarratives(m){
     outlook:`The ${state.investmentName||"portfolio"} enters ${nextQtr(q)} with ${m.occupancy>=90?"strong":"stable"} occupancy at ${m.occupancy}% weighted average, supported by ${m.newLeases} new leases and ${m.renewals} renewals secured during ${q}.`
   };
 }
+function genBpNarrative(){
+  const bp=state.businessPlan||{};
+  const q=state.currentQuarter||"this quarter";
+  const inv=state.investmentName||"the portfolio";
+  const comp=parseInt(bp.unitsCompleted)||0;
+  const rem=parseInt(bp.unitsRemaining)||0;
+  const total=comp+rem;
+  const unitsPct=total>0?Math.min(100,Math.round(comp/total*100)):0;
+  const budget=parseFloat(String(bp.totalBudget||"0").replace(/[$,]/g,""))||0;
+  const spent=parseFloat(String(bp.spentToDate||"0").replace(/[$,]/g,""))||0;
+  const budgetPct=budget>0?Math.min(100,Math.round(spent/budget*100)):0;
+  const remaining=budget>0?budget-spent:0;
+  const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
+  const avgCost=remodels.length>0?Math.round(remodels.reduce((s,u)=>s+u.totalCost,0)/remodels.length):0;
+  const launch=parseFloat(String(bp.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
+  const pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+  const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
+  const totalOcc=pm.reduce((s,p)=>s+Math.round(((p.unitCount||0)*(p.occupancy||0)/100)),0);
+  const curRentPerUnit=totalOcc>0?Math.round(totalRent/totalOcc):0;
+  const rentDelta=launch>0&&curRentPerUnit>0?curRentPerUnit-launch:null;
+  const rentDeltaPct=rentDelta!==null&&launch>0?Math.round(rentDelta/launch*100):null;
+
+  // Progress sentence
+  let progressSentence="";
+  if(comp>0&&total>0){
+    progressSentence=`As of ${q}, ${comp} of ${total} planned unit${total!==1?"s have":" has"} been remodeled, representing ${unitsPct}% completion of the renovation program at ${inv}.`;
+  } else if(comp>0){
+    progressSentence=`As of ${q}, ${comp} unit${comp!==1?"s have":" has"} been remodeled at ${inv}.`;
+  }
+
+  // Budget sentence
+  let budgetSentence="";
+  if(spent>0&&budget>0){
+    const delta=budgetPct-unitsPct;
+    const alignment=Math.abs(delta)<=5
+      ?"tracking closely with unit completion"
+      :delta>5
+        ?`running ${delta} percentage points ahead of unit completion`
+        :`running ${Math.abs(delta)} percentage points behind unit completion`;
+    budgetSentence=` Total renovation spend stands at $${spent.toLocaleString()} (${budgetPct}% of the $${budget.toLocaleString()} budget), ${alignment}.${remaining>0?` Approximately $${remaining.toLocaleString()} remains available for the ${rem} unit${rem!==1?"s":""} still to be renovated.`:""}`;
+  } else if(spent>0){
+    budgetSentence=` Total renovation spend to date is $${spent.toLocaleString()}.`;
+  }
+
+  // Per-unit cost sentence
+  let costSentence="";
+  if(avgCost>0){
+    costSentence=` The average all-in cost per remodeled unit is $${avgCost.toLocaleString()}.`;
+  }
+
+  // Rent growth sentence
+  let rentSentence="";
+  if(rentDelta!==null&&rentDeltaPct!==null){
+    if(rentDelta>0){
+      rentSentence=` The renovation program has supported meaningful rent growth — average occupied rent has increased ${rentDeltaPct}% from the $${launch.toLocaleString()} per unit launch target to $${curRentPerUnit.toLocaleString()} currently.`;
+    } else if(rentDelta<0){
+      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit remains below the $${launch.toLocaleString()} per unit launch target, reflecting the early stage of the renovation program.`;
+    } else {
+      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit is in line with the launch target.`;
+    }
+  }
+
+  // Outlook sentence
+  let outlookSentence="";
+  if(rem>0){
+    outlookSentence=` The team will continue executing renovations on the remaining ${rem} unit${rem!==1?"s":""}, with the goal of driving further rent growth and value creation across the portfolio.`;
+  } else if(comp>0&&rem===0){
+    outlookSentence=` With all planned renovations complete, the focus shifts to stabilizing occupancy at post-renovation rent levels and maximizing the return on invested capital.`;
+  }
+
+  return (progressSentence+budgetSentence+costSentence+rentSentence+outlookSentence).trim();
+}
+
 function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   const sec={loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false,...(sections||{})};
   const bp=state.businessPlan||{};
@@ -3584,7 +3657,10 @@ function renderInvestmentStep0(){
             })()}
           </div>
         </div>
-        <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Business Plan Narrative</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px">Business Plan Narrative</div>
+          <button onclick="const t=genBpNarrative();if(t){state.businessPlan.narrative=t;render();}" style="padding:5px 11px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;">✦ Generate</button>
+        </div>
         <textarea placeholder="Describe the current phase of the business plan, key milestones achieved, and what's ahead..." rows="4"
           oninput="state.businessPlan.narrative=this.value"
           style="width:100%;padding:10px;border:1px solid #c8e6de;border-radius:8px;font-size:13px;font-family:Inter,sans-serif;resize:vertical;background:#f9fffe;margin:0">${escapeHtml(state.businessPlan.narrative)}</textarea>
