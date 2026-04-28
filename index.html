@@ -2558,8 +2558,21 @@ function uploadBpLaunchRent(){
         try{
           const wb=XLSX.read(raw,{type:"array"});
           const ws=wb.Sheets[wb.SheetNames[0]];
-          // Convert to array-of-objects using first row as headers
-          rows=XLSX.utils.sheet_to_json(ws,{defval:""});
+          // Read as raw arrays first so we can find the actual header row
+          // (Buildium rent rolls have 4 metadata rows before the real header)
+          const rawArrays=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+          let headerRowIdx=-1;
+          for(let i=0;i<Math.min(15,rawArrays.length);i++){
+            const rowLower=rawArrays[i].map(c=>String(c||"").trim().toLowerCase());
+            if(rowLower.includes("unit")&&rowLower.includes("rent")){headerRowIdx=i;break;}
+          }
+          if(headerRowIdx<0) return null;
+          const headers=rawArrays[headerRowIdx].map(c=>String(c||"").trim());
+          rows=rawArrays.slice(headerRowIdx+1).map(arr=>{
+            const obj={};
+            headers.forEach((h,i)=>{obj[h]=arr[i]===undefined||arr[i]===null?"":arr[i];});
+            return obj;
+          });
         }catch(_){ return null; }
         // Filter: try Buildium pattern first, fall back to AppFolio
         const bdRows=rows.filter(isBuildiumUnitRow);
