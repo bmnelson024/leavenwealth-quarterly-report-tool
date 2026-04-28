@@ -2376,10 +2376,12 @@ function uploadBpCapex(){
       }
       const items=(parsed.items||[]).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
       state.businessPlan.spentToDate=String(Math.round(parsed.totalCapex));
+      const rc=parsed.remodelsCount||0;
+      if(rc>0) state.businessPlan.unitsCompleted=String(rc);
       state.businessPlan.bpCapexParsed={
         itemCount:items.length, items,
         remodels:parsed.remodels||null,
-        remodelsCount:parsed.remodelsCount||0
+        remodelsCount:rc
       };
       render();
     };
@@ -2459,14 +2461,17 @@ function parseBpCapexBuildium(fileData){
       const row=rawRows[i]||[];
       const col0=String(row[0]||"").trim();
       const col0L=col0.toLowerCase();
+      // Explicitly skip any summary/total rows regardless of other columns —
+      // Buildium "Total for [section]" rows carry the subtotal in the Amount
+      // column and would double-count if treated as data rows.
+      if(/^(total\b|grand total)/i.test(col0)) continue;
       const dateVal=row[colDate>=0?colDate:0];
       const isDate=dateVal instanceof Date||typeof dateVal==="number"||/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(String(dateVal));
       const nameVal=String(row[colName>=0?colName:3]||"").trim();
       const isSec=col0&&!isDate&&!nameVal;
 
       if(isSec){
-        if(col0L.startsWith("total for")){curSection=null;curLC=null;inCap=false;}
-        else if(col0L.startsWith("capital improvements")){curSection=col0;curLC=col0L;inCap=true;}
+        if(col0L.startsWith("capital improvements")){curSection=col0;curLC=col0L;inCap=true;}
         else{curSection=null;curLC=null;inCap=false;}
         continue;
       }
