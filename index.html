@@ -2386,7 +2386,8 @@ function uploadBpCapex(){
       state.businessPlan.bpCapexParsed={
         itemCount:items.length, items,
         remodels:parsed.remodels||null,
-        remodelsCount:rc
+        remodelsCount:rc,
+        totalAllCapex:parsed.totalAllCapex||0
       };
       render();
     };
@@ -2549,8 +2550,11 @@ function parseBpCapexBuildium(fileData){
       .filter(i=>i.amount>0)
       .sort((a,b)=>b.amount-a.amount);
 
-    console.log("[BpCapex] totalCapex:",Math.round(capTotal),"sections found:",Object.keys(bySection),"remodels:",remodels.length);
-    return{totalCapex:Math.round(capTotal),remodels,remodelsCount:remodels.length,items,itemCount:items.length};
+    // totalCapex = only the costs attributable to remodeled units across the 7 tracked categories
+    // totalAllCapex = every capital improvement charge in the file (for context / "other capex")
+    const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
+    console.log("[BpCapex] remodelsTotal:",remodelsTotal,"totalAllCapex:",Math.round(capTotal),"remodels:",remodels.length);
+    return{totalCapex:remodelsTotal,totalAllCapex:Math.round(capTotal),remodels,remodelsCount:remodels.length,items,itemCount:items.length};
   }catch(e){console.warn("parseBpCapexBuildium failed:",e);return null;}
 }
 
@@ -2803,6 +2807,12 @@ function processInvestmentData(){
     }
     const totalCapex=results.reduce((s,m)=>s+(m.capex||0),0);
     state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats};
+    // Auto-fill Business Plan Units Remaining now that we know totalUnits
+    // (handles the case where the CapEx file was imported before the report was processed)
+    if(state.businessPlan&&state.businessPlan.unitsCompleted&&totalUnitsPortfolio>0){
+      const rc=parseInt(state.businessPlan.unitsCompleted)||0;
+      if(rc>0&&!state.businessPlan.unitsRemaining) state.businessPlan.unitsRemaining=String(Math.max(0,totalUnitsPortfolio-rc));
+    }
     // Only regenerate narratives if the user has NOT edited them. The
     // `invNarrativesEdited` flag is set by the textarea oninput handler;
     // for legacy saves that predate the flag we fall back to a content check.
@@ -3017,41 +3027,31 @@ ${(()=>{
     <div class="sc"><div class="sl">Avg Economic Occupancy (Weighted)</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
     <div class="sc"><div class="sl">Total Units</div><div class="sv">${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</div></div>
   </div>
-  ${(sec.loanPrincipal||sec.writeoffs)?`<div class="sh2">Loan & Write-off Summary</div>
+  ${(()=>{
+    const hasPrincipal=sec.loanPrincipal&&(loan.principalInception||loan.principalCurrent);
+    const hasWriteoffs=sec.writeoffs&&loan.writeoffs;
+    if(!hasPrincipal&&!hasWriteoffs) return "";
+    return `<div class="sh2">Loan & Write-off Summary</div>
   <div class="loan-row">
-    ${sec.loanPrincipal?`<div class="loan-tile">
+    ${hasPrincipal?`<div class="loan-tile">
       <h3>Total Loan Principal Paid</h3>
       <div class="loan-inner">
-        <div><div class="ll2">Inception – ${loan.principalInceptionDate||("12/31/"+(prevYrNum||""))}</div><div class="lv2">${loanInception}</div></div>
-        <div><div class="ll2">Inception – ${loanDate}</div><div class="lv2">${loanCurrent}</div></div>
+        ${loan.principalInception?`<div><div class="ll2">Inception – ${loan.principalInceptionDate||("12/31/"+(prevYrNum||""))}</div><div class="lv2">${loanInception}</div></div>`:""}
+        ${loan.principalCurrent?`<div><div class="ll2">Inception – ${loanDate}</div><div class="lv2">${loanCurrent}</div></div>`:""}
       </div>
     </div>`:""}
-    ${sec.writeoffs?`<div class="loan-tile">
+    ${hasWriteoffs?`<div class="loan-tile">
       <h3>Total Writeoffs from Inception</h3>
       <div style="font-size:28px;font-weight:700;color:var(--dark);margin-top:6px;">${writeoffs}</div>
     </div>`:""}
-  </div>`:""}
+  </div>`;
+  })()}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>
 ${sec.businessPlan && bp.enabled ? `
 <!-- PAGE BP: BUSINESS PLAN STATUS -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
-  <div class="sh2">Line of Credit</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px;font-family:sans-serif;">
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">LOC Limit</div>
-      <div style="font-size:20px;font-weight:700;color:var(--dark)">${bp.locLimit?'$'+Number(String(bp.locLimit).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
-    </div>
-    <div style="background:var(--dark);border-radius:8px;padding:14px 16px;">
-      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Amount Drawn</div>
-      <div style="font-size:20px;font-weight:700;color:white">${bp.locDrawn?'$'+Number(String(bp.locDrawn).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
-    </div>
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Remaining LOC</div>
-      <div style="font-size:20px;font-weight:700;color:var(--dark)">${bp.locRemaining?'$'+Number(String(bp.locRemaining).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
-    </div>
-  </div>
   <div class="sh2">Remodel Progress</div>
   ${(()=>{
     const comp=parseInt(bp.unitsCompleted)||0;
@@ -3097,10 +3097,11 @@ ${sec.businessPlan && bp.enabled ? `
       const remaining=budget-spent;
       const capexItems=(bp.bpCapexParsed&&bp.bpCapexParsed.items)||[];
       const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
+      const totalAllCapex=(bp.bpCapexParsed&&bp.bpCapexParsed.totalAllCapex)||0;
       const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
       const avgPerUnit=remodels.length>0?Math.round(remodelsTotal/remodels.length):0;
-      const otherCapex=spent>remodelsTotal?Math.round(spent-remodelsTotal):0;
-      const remodelPct=spent>0?Math.round(remodelsTotal/spent*100):0;
+      const otherCapex=totalAllCapex>remodelsTotal?Math.round(totalAllCapex-remodelsTotal):0;
+      const remodelPct=totalAllCapex>0?Math.round(remodelsTotal/totalAllCapex*100):0;
       return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
         <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
           <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Total Budget</div>
@@ -3124,12 +3125,12 @@ ${sec.businessPlan && bp.enabled ? `
         <div style="background:#e6f9f4;border-radius:8px;padding:12px 14px;border-left:3px solid #00c48c;">
           <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Unit Remodel Spend</div>
           <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${remodelsTotal.toLocaleString()}</div>
-          <div style="font-size:10px;color:#5a8070;margin-top:2px">${remodelPct}% of total capex</div>
+          <div style="font-size:10px;color:#5a8070;margin-top:2px">${remodelPct}% of all property capex</div>
         </div>
         <div style="background:#f3f4f6;border-radius:8px;padding:12px 14px;border-left:3px solid #9ca3af;">
-          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Other Capital Work</div>
-          <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${otherCapex.toLocaleString()}</div>
-          <div style="font-size:10px;color:#5a8070;margin-top:2px">${100-remodelPct}% of total capex</div>
+          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Other Property CapEx</div>
+          <div style="font-size:18px;font-weight:700;color:#1a3a35;">${otherCapex>0?'$'+otherCapex.toLocaleString():'—'}</div>
+          <div style="font-size:10px;color:#5a8070;margin-top:2px">${totalAllCapex>0?(100-remodelPct)+'% of all property capex':''}</div>
         </div>
         <div style="background:#1a3a35;border-radius:8px;padding:12px 14px;">
           <div style="font-size:9px;color:#00c48c;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Avg Cost / Remodeled Unit</div>
@@ -3137,28 +3138,39 @@ ${sec.businessPlan && bp.enabled ? `
           <div style="font-size:10px;color:#00c48c;margin-top:2px">${remodels.length} unit${remodels.length!==1?'s':''} remodeled</div>
         </div>
       </div>
-      <div style="margin-bottom:4px;display:flex;justify-content:space-between;font-size:10px;color:#5a8070"><span>Remodel spend vs. other capital work</span><span>${remodelPct}% / ${100-remodelPct}%</span></div>
+      ${totalAllCapex>0?`<div style="margin-bottom:4px;display:flex;justify-content:space-between;font-size:10px;color:#5a8070"><span>Remodel spend vs. other property capex</span><span>${remodelPct}% / ${100-remodelPct}%</span></div>
       <div style="height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;margin-bottom:16px;">
         <div style="height:100%;width:${remodelPct}%;background:#00c48c;border-radius:4px;"></div>
-      </div>`:''}
+      </div>`:'<div style="height:8px;margin-bottom:16px;"></div>'}`:''}
       ${remodels.length>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;">
         <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Remodeled Units (${remodels.length})</div>
         <div style="font-size:10px;color:var(--muted)">Total: $${remodelsTotal.toLocaleString()}</div>
       </div>
       <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:14px;">
-        <div style="display:grid;grid-template-columns:auto 1fr auto auto auto auto auto auto;gap:0;background:#f0fdf8;padding:5px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">
-          <span>Unit</span><span></span><span style="text-align:right;padding:0 8px">Labor</span><span style="text-align:right;padding:0 8px">Appl.</span><span style="text-align:right;padding:0 8px">Carpet/Floor</span><span style="text-align:right;padding:0 8px">Materials</span><span style="text-align:right;padding:0 8px">Paint</span><span style="text-align:right;padding-left:8px">Total</span>
-        </div>
-        ${remodels.map((u,i)=>`<div style="display:grid;grid-template-columns:auto 1fr auto auto auto auto auto auto;gap:0;padding:6px 10px;background:${i%2===0?'white':'#f9fffe'};font-size:10px;border-top:1px solid #f0f0f0;">
-          <span style="font-weight:700;color:var(--dark)">${escapeHtml(u.unit)}</span>
-          <span></span>
-          <span style="text-align:right;padding:0 8px;color:var(--muted)">${u.laborCost>0?'$'+Math.round(u.laborCost).toLocaleString():''}</span>
-          <span style="text-align:right;padding:0 8px;color:var(--muted)">${u.applianceCost>0?'$'+Math.round(u.applianceCost).toLocaleString():''}</span>
-          <span style="text-align:right;padding:0 8px;color:var(--muted)">${(u.carpetCost+u.flooringCost)>0?'$'+Math.round(u.carpetCost+u.flooringCost).toLocaleString():''}</span>
-          <span style="text-align:right;padding:0 8px;color:var(--muted)">${(u.materialsCost+u.blindsCost)>0?'$'+Math.round(u.materialsCost+u.blindsCost).toLocaleString():''}</span>
-          <span style="text-align:right;padding:0 8px;color:var(--muted)">${u.paintCost>0?'$'+Math.round(u.paintCost).toLocaleString():''}</span>
-          <span style="text-align:right;padding-left:8px;font-weight:700;color:var(--dark)">$${Math.round(u.totalCost).toLocaleString()}</span>
-        </div>`).join('')}
+        <table style="width:100%;border-collapse:collapse;font-size:10px;">
+          <thead>
+            <tr style="background:#f0fdf8;">
+              <th style="text-align:left;padding:6px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Unit</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Labor</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Appl.</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Carpet/Floor</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Materials</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Paint</th>
+              <th style="text-align:right;padding:6px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${remodels.map((u,i)=>`<tr style="background:${i%2===0?'white':'#f9fffe'};border-top:1px solid #f0f0f0;">
+              <td style="padding:6px 10px;font-weight:700;color:var(--dark);white-space:nowrap;">${escapeHtml(u.unit)}</td>
+              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${u.laborCost>0?'$'+Math.round(u.laborCost).toLocaleString():'—'}</td>
+              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${u.applianceCost>0?'$'+Math.round(u.applianceCost).toLocaleString():'—'}</td>
+              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${(u.carpetCost+u.flooringCost)>0?'$'+Math.round(u.carpetCost+u.flooringCost).toLocaleString():'—'}</td>
+              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${(u.materialsCost+u.blindsCost)>0?'$'+Math.round(u.materialsCost+u.blindsCost).toLocaleString():'—'}</td>
+              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${u.paintCost>0?'$'+Math.round(u.paintCost).toLocaleString():'—'}</td>
+              <td style="padding:6px 10px;text-align:right;font-weight:700;color:var(--dark);">$${Math.round(u.totalCost).toLocaleString()}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
       </div>`:""}
       ${capexItems.length>0?`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Capital Spend by Category</div>
       <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
@@ -3498,26 +3510,11 @@ function renderInvestmentStep0(){
         <input type="checkbox" ${state.businessPlan.enabled?"checked":""} onchange="state.businessPlan.enabled=this.checked;render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
         <div>
           <div style="font-size:13px;font-weight:600;color:#1a3a35">Enable Business Plan section for this report</div>
-          <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a dedicated page with LOC details, remodel progress, budget vs. actual, and a narrative</div>
+          <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a dedicated page with remodel progress, budget vs. actual, and a narrative</div>
         </div>
       </label>
       ${state.businessPlan.enabled?`
       <div style="margin-top:14px;border-top:1px solid #c8e6de;padding-top:14px">
-        <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Line of Credit</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">LOC Limit</label>
-            <input type="text" placeholder="e.g. 2,500,000" value="${escapeHtml(state.businessPlan.locLimit)}"
-              oninput="state.businessPlan.locLimit=this.value"
-              style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Amount Drawn</label>
-            <input type="text" placeholder="e.g. 1,200,000" value="${escapeHtml(state.businessPlan.locDrawn)}"
-              oninput="state.businessPlan.locDrawn=this.value"
-              style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Remaining LOC</label>
-            <input type="text" placeholder="e.g. 1,300,000" value="${escapeHtml(state.businessPlan.locRemaining)}"
-              oninput="state.businessPlan.locRemaining=this.value"
-              style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-        </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Completed</label>
