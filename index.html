@@ -3144,6 +3144,30 @@ function genBpNarrative(){
     }
   }
 
+  // Remodel ROI sentence — uses same per-unit calculation as the ROI tiles
+  let roiSentence="";
+  if(remodels.length>0){
+    const launchRents=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
+    const overrides=bp.bpLaunchRentOverrides||{};
+    const currentRents=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+    let totalUplift=0,roiUnits=0;
+    remodels.forEach(u=>{
+      const nk=normUnitKey(u.unit);
+      const lr=launchRents[nk]||overrides[nk]||0;
+      const cr=currentRents[nk]||0;
+      if(lr>0&&cr>0){totalUplift+=(cr-lr);roiUnits++;}
+    });
+    if(roiUnits>0){
+      const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
+      const monthlyUplift=Math.round(totalUplift/roiUnits);
+      const annualUplift=Math.round(monthlyUplift*12*roiUnits);
+      const roi=remodelsTotal>0?Math.round(annualUplift/remodelsTotal*100*10)/10:null;
+      if(monthlyUplift>0){
+        roiSentence=` Across the ${roiUnits} remodeled unit${roiUnits!==1?"s":""} with confirmed current rents, the average monthly rent uplift is $${monthlyUplift.toLocaleString()} per unit, generating $${annualUplift.toLocaleString()} in incremental annual rent${roi!==null?` and a ${roi}% return on remodel spend`:""}.`;
+      }
+    }
+  }
+
   // Outlook sentence
   let outlookSentence="";
   if(rem>0){
@@ -3152,7 +3176,7 @@ function genBpNarrative(){
     outlookSentence=` With all planned renovations complete, the focus shifts to stabilizing occupancy at post-renovation rent levels and maximizing the return on invested capital.`;
   }
 
-  return (progressSentence+budgetSentence+costSentence+rentSentence+outlookSentence).trim();
+  return (progressSentence+budgetSentence+costSentence+rentSentence+roiSentence+outlookSentence).trim();
 }
 
 function buildInvestmentReport(m,n,invName,quarter,loan,sections){
@@ -3493,13 +3517,7 @@ ${sec.businessPlan && bp.enabled ? `
           ${remodels.map(u=>`<span style="background:white;border:1px solid #e5e7eb;border-radius:4px;padding:3px 8px;font-size:10px;color:var(--dark);font-weight:600">${escapeHtml(u.unit)}</span>`).join('')}
         </div>
       </div>`:""}
-      ${capexItems.length>0?`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Capital Spend by Category</div>
-      <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
-        ${capexItems.map((it,i)=>`<div style="display:flex;justify-content:space-between;padding:6px 12px;background:${i%2===0?'white':'#f9fffe'};font-size:11px;">
-          <span style="color:var(--dark)">${escapeHtml(it.name)}</span>
-          <span style="font-weight:600;color:var(--dark)">$${it.amount.toLocaleString()}</span>
-        </div>`).join('')}
-      </div>`:""}`;
+      `;
     })()}
   </div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
@@ -3507,6 +3525,17 @@ ${sec.businessPlan && bp.enabled ? `
 <!-- PAGE BP2: BUSINESS PLAN ROI -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
+  ${(()=>{
+    // Capital Spend by Category table (moved from page 1 to avoid overflow)
+    const _capexItems2=(bp.bpCapexParsed&&bp.bpCapexParsed.items)||[];
+    return _capexItems2.length>0?`<div style="margin-bottom:16px"><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Capital Spend by Category</div>
+      <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+        ${_capexItems2.map((it,i)=>`<div style="display:flex;justify-content:space-between;padding:6px 12px;background:${i%2===0?'white':'#f9fffe'};font-size:11px;">
+          <span style="color:var(--dark)">${escapeHtml(it.name)}</span>
+          <span style="font-weight:600;color:var(--dark)">$${it.amount.toLocaleString()}</span>
+        </div>`).join('')}
+      </div></div>`:'';
+  })()}
   ${(()=>{
     // "Rent at Launch vs. Today" always uses portfolio-wide averages (all occupied units).
     // The Remodel ROI section below handles remodel-unit-specific calculations.
