@@ -351,6 +351,10 @@ function downloadBackup(){
     const a=document.createElement('a');
     a.href=url; a.download='leavenwealth-backup-'+new Date().toISOString().slice(0,10)+'.json';
     a.click(); URL.revokeObjectURL(url);
+    localStorage.setItem('lw_last_backup_date', new Date().toISOString().slice(0,10));
+    // Hide the backup banner if it's showing
+    const banner=document.getElementById('backup-reminder-banner');
+    if(banner) banner.style.display='none';
   }catch(e){showError('Could not create backup: '+e.message);}
 }
 function restoreBackup(){
@@ -1042,7 +1046,23 @@ function renderHome(){
   const saves=getSavesIndex();
   const fmtDate=iso=>{try{const d=new Date(iso);return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})+" at "+d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});}catch(e){return iso;}};
   const stepLabel=s=>s>=2?"Narratives ready":s===1?"Metrics reviewed":"Uploaded";
+  const _today=new Date().toISOString().slice(0,10);
+  const _lastBackup=localStorage.getItem('lw_last_backup_date');
+  const _needsBackup=saves.length>0&&(!_lastBackup||_lastBackup<_today);
   document.getElementById("step-content").innerHTML=`
+    ${_needsBackup?`<div id="backup-reminder-banner" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">💾</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#92400e">Back up your reports</div>
+          <div style="font-size:12px;color:#b45309">${_lastBackup?`Last backup: ${_lastBackup}`:'No backup on record'} — download a fresh copy to keep your data safe.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        <button onclick="downloadBackup()" style="background:#f59e0b;color:white;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">⬇ Download Now</button>
+        <button onclick="localStorage.setItem('lw_last_backup_date','${_today}');document.getElementById('backup-reminder-banner').style.display='none'" style="background:white;color:#92400e;border:1px solid #fcd34d;border-radius:7px;padding:8px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">Remind me later</button>
+      </div>
+    </div>`:''}
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px">
       <div>
         <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Saved Reports</h2>
@@ -2853,6 +2873,10 @@ function processInvestmentData(){
       }catch(_){}
     }
     state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents};
+    // DEBUG: expose unit key samples to console for matching diagnostics (remove after fix)
+    window._lwDbgCurrentRentKeys = Object.keys(unitCurrentRents).slice(0,20);
+    console.log('[LW Debug] unitCurrentRents sample keys:', window._lwDbgCurrentRentKeys);
+    console.log('[LW Debug] unitCurrentRents total entries:', Object.keys(unitCurrentRents).length);
     // Auto-fill Business Plan Units Remaining now that we know totalUnits
     // (handles the case where the CapEx file was imported before the report was processed)
     if(state.businessPlan&&state.businessPlan.unitsCompleted&&totalUnitsPortfolio>0){
