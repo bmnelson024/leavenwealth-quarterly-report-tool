@@ -470,6 +470,8 @@ function _makeDefaultState(){
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
     businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{}, bpCurrentRentParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
+    invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
+    hasProForma: true,      // show "vs. Pro Forma" in single-property chart labels?
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
     bgChampionCustom: { commentary:"", charts:[] }
   };
@@ -2088,7 +2090,7 @@ ${secOn.snapshot?`<div class="page">
 ${secOn.financialCharts?`<div class="page">
   <div class="pn">${prop}</div><div class="sh">Financial Charts</div>
   <div class="cg">
-    ${["chart_operating_income:Operating Income vs. Pro Forma","chart_operating_expense:Operating Expense vs. Pro Forma","chart_noi:NOI vs. Pro Forma","chart_income_vs_expense:Operating Income vs. Expense"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
+    ${(()=>{const _pf=state.hasProForma!==false;return["chart_operating_income:"+((_pf?"Operating Income vs. Pro Forma":"Operating Income")),"chart_operating_expense:"+((_pf?"Operating Expense vs. Pro Forma":"Operating Expense")),"chart_noi:"+((_pf?"NOI vs. Pro Forma":"NOI")),"chart_income_vs_expense:Operating Income vs. Expense"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("");})()}
   </div>
     <div class="footer-prop">${prop}</div>
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
@@ -3182,6 +3184,7 @@ function genBpNarrative(){
 function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   const sec={loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false,...(sections||{})};
   const bp=state.businessPlan||{};
+  const _pf=state.invHasProForma!==false; // true = include "vs. Pro Forma" in chart titles
   // Pre-escape for HTML interpolation throughout this function.
   const inv=escapeHtml(invName||"Investment");
   const qtr=escapeHtml(quarter||"");
@@ -3643,8 +3646,8 @@ ${sec.financialCharts?`
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Financial Charts — ${qtr}</div>
   <div class="cg">
-    ${C("inv_operating_income","Operating Income vs. Pro Forma")}
-    ${C("inv_operating_expense","Operating Expense vs. Pro Forma")}
+    ${C("inv_operating_income",_pf?"Operating Income vs. Pro Forma":"Operating Income")}
+    ${C("inv_operating_expense",_pf?"Operating Expense vs. Pro Forma":"Operating Expense")}
     ${C("inv_income_by_property","Operating Income By Property")}
     ${C("inv_expense_by_property","Operating Expense By Property")}
   </div>
@@ -3655,7 +3658,7 @@ ${sec.financialCharts?`
   <div class="pn">${inv}</div><div class="sh">Financial Charts — ${qtr}</div>
   <div class="cg">
     ${C("inv_income_vs_expense","Operating Income vs. Operating Expense")}
-    ${C("inv_noi","NOI vs. Pro Forma")}
+    ${C("inv_noi",_pf?"NOI vs. Pro Forma":"NOI")}
     ${C("inv_noi_by_property","NOI By Property")}
     ${C("inv_utility","Utility Income vs. Expenses")}
   </div>
@@ -4053,18 +4056,23 @@ function renderInvestmentStep0(){
     <div class="section-label">Properties <span style="font-weight:400;font-size:11px;color:#9ca3af">(${state.invProperties.length} added)</span></div>
     ${state.invProperties.map((p,i)=>propCard(p,i)).join("")}
     <button onclick="addInvProperty()" style="width:100%;padding:12px;border:2px dashed #c8e6de;border-radius:10px;background:#fafafa;color:#1a3a35;font-weight:600;font-size:13px;cursor:pointer;margin-bottom:16px">+ Add Property</button>
-    <div class="section-label">Investment-Level Charts <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${chartsN}/12 uploaded</span></div>
+    <div class="section-label">Investment-Level Charts <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${chartsN}/12 uploaded</span>
+      <label style="display:inline-flex;align-items:center;gap:5px;margin-left:14px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
+        <input type="checkbox" ${state.invHasProForma!==false?'checked':''} onchange="state.invHasProForma=this.checked" style="accent-color:#1a3a35;width:13px;height:13px"/>
+        Show "vs. Pro Forma" in chart titles
+      </label>
+    </div>
     <div style="background:#e6f9f4;border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div><div style="font-weight:600;font-size:13px;color:#1a3a35;margin-bottom:3px">Bulk Upload Charts</div>
         <div style="font-size:11px;color:#5a8070">Select all investment-level chart images — matched automatically by filename.</div></div>
       <button class="upload-btn" style="white-space:nowrap;padding:8px 14px" onclick="loadAllInvCharts()">📂 Upload All Charts</button>
     </div>
     <div class="chart-grid">
-      ${invChartRow("inv_operating_income","Operating Income vs. Pro Forma")}
+      ${invChartRow("inv_operating_income",state.invHasProForma!==false?"Operating Income vs. Pro Forma":"Operating Income")}
       ${invChartRow("inv_income_by_property","Operating Income By Property")}
-      ${invChartRow("inv_operating_expense","Operating Expense vs. Pro Forma")}
+      ${invChartRow("inv_operating_expense",state.invHasProForma!==false?"Operating Expense vs. Pro Forma":"Operating Expense")}
       ${invChartRow("inv_expense_by_property","Operating Expense By Property")}
-      ${invChartRow("inv_noi","NOI vs. Pro Forma")}
+      ${invChartRow("inv_noi",state.invHasProForma!==false?"NOI vs. Pro Forma":"NOI")}
       ${invChartRow("inv_noi_by_property","NOI By Property")}
       ${invChartRow("inv_occupancy_rate","Occupancy Rate")}
       ${invChartRow("inv_occupancy_by_property","Occupancy Rate By Property")}
@@ -6079,7 +6087,12 @@ function render(){
       ${fileRow("rr2","Rent Roll — End of "+mo[1],"Pull at end of month",'text',"tryAutoFillPropertyName")}
       ${fileRow("rr3","Rent Roll — End of "+mo[2],"Pull at end of month",'text',"tryAutoFillPropertyName")}`;
     const chartsSection = `
-      <div class="section-label" style="margin-top:12px">AppFolio IM Charts <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${chartsN}/10 uploaded</span></div>
+      <div class="section-label" style="margin-top:12px">AppFolio IM Charts <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${chartsN}/10 uploaded</span>
+        <label style="display:inline-flex;align-items:center;gap:5px;margin-left:14px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
+          <input type="checkbox" ${state.hasProForma!==false?'checked':''} onchange="state.hasProForma=this.checked" style="accent-color:#1a3a35;width:13px;height:13px"/>
+          Show "vs. Pro Forma" in chart titles
+        </label>
+      </div>
       <div style="background:#e6f9f4;border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div>
           <div style="font-weight:600;font-size:13px;color:#1a3a35;margin-bottom:3px">Bulk Upload Charts</div>
@@ -6088,10 +6101,10 @@ function render(){
         <button class="upload-btn" style="white-space:nowrap;padding:8px 14px" onclick="loadAllCharts()">📂 Upload All Charts</button>
       </div>
       <div class="chart-grid">
-        ${chartRow("chart_operating_income","Operating Income vs. Pro Forma")}
-        ${chartRow("chart_operating_expense","Operating Expense vs. Pro Forma")}
+        ${chartRow("chart_operating_income",state.hasProForma!==false?"Operating Income vs. Pro Forma":"Operating Income")}
+        ${chartRow("chart_operating_expense",state.hasProForma!==false?"Operating Expense vs. Pro Forma":"Operating Expense")}
         ${chartRow("chart_income_vs_expense","Operating Income vs. Expense")}
-        ${chartRow("chart_noi","NOI vs. Pro Forma")}
+        ${chartRow("chart_noi",state.hasProForma!==false?"NOI vs. Pro Forma":"NOI")}
         ${chartRow("chart_lease_expirations","Lease Expirations")}
         ${chartRow("chart_rent_growth","Rent Growth & Market Rent")}
         ${chartRow("chart_occupancy_rate","Occupancy Rate")}
