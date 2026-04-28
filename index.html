@@ -468,7 +468,7 @@ function _makeDefaultState(){
     invPrevMetrics: null,
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
-    businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{} },
+    businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{}, bpCurrentRentParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
     bgChampionCustom: { commentary:"", charts:[] }
@@ -2707,6 +2707,74 @@ function uploadBpLaunchRent(){
   }; inp.click();
 }
 
+// uploadBpCurrentRent: imports current-quarter rent roll(s) and extracts
+// per-unit current rents for the Business Plan ROI section.
+function uploadBpCurrentRent(){
+  const inp=document.createElement("input");
+  inp.type="file"; inp.accept=".xlsx,.xls,.csv,.tsv,.txt"; inp.multiple=true;
+  inp.onchange=e=>{
+    const files=Array.from(e.target.files); if(!files.length) return;
+    let totalRent=0, totalOccUnits=0, done=0, failed=[], mergedUnitRents={};
+    files.forEach(f=>{
+      const isXL=/\.(xlsx|xls)$/i.test(f.name);
+      const r=new FileReader();
+      r.onload=ev=>{
+        const raw=ev.target.result;
+        let rows=[];
+        if(isXL){
+          try{
+            const wb=XLSX.read(raw,{type:"array"});
+            const ws=wb.Sheets[wb.SheetNames[0]];
+            const rawArrays=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+            let hi=-1;
+            for(let i=0;i<Math.min(15,rawArrays.length);i++){
+              const rl=rawArrays[i].map(c=>String(c||"").trim().toLowerCase());
+              if(rl.includes("unit")&&rl.includes("rent")){hi=i;break;}
+            }
+            if(hi<0){failed.push(f.name);if(++done===files.length)afterAll();return;}
+            const headers=rawArrays[hi].map(c=>String(c||"").trim());
+            rows=rawArrays.slice(hi+1).map(arr=>{const o={};headers.forEach((h,i)=>{o[h]=arr[i]===undefined?"":arr[i];});return o;});
+            const bdRows=rows.filter(isBuildiumUnitRow);
+            if(bdRows.length>0) rows=bdRows;
+            else rows=rows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+          }catch(_){failed.push(f.name);if(++done===files.length)afterAll();return;}
+        } else {
+          const bdRows=parseDelim(skipMetaRows(raw||"")).filter(isBuildiumUnitRow);
+          if(bdRows.length>0) rows=bdRows;
+          else rows=parseDelim(raw||"").filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u)&&!/^\d+\s*(bed|bath|br|ba)\b/i.test(u);});
+        }
+        if(!rows.length){failed.push(f.name);if(++done===files.length)afterAll();return;}
+        let rent=0,occ=0;
+        rows.forEach(r=>{
+          if(!getVacantFlag(r)){
+            const rv=parseCur(r["Rent"]||r["Monthly Rent"]||r["Actual Rent"]||r["ActualRent"]||0);
+            if(rv>0){
+              rent+=rv; occ++;
+              const normU=normUnitKey(String(r["Unit"]||r["unit"]||"").trim());
+              if(normU) mergedUnitRents[normU]=rv;
+            }
+          }
+        });
+        totalRent+=rent; totalOccUnits+=occ;
+        if(++done===files.length) afterAll();
+      };
+      r.onerror=()=>{failed.push(f.name);if(++done===files.length)afterAll();};
+      if(isXL) r.readAsArrayBuffer(f); else r.readAsText(f);
+    });
+    function afterAll(){
+      if(totalOccUnits===0){
+        showError("Could not extract rent data. Expected AppFolio or Buildium rent roll format."+(failed.length?" Failed: "+failed.join(", "):""));
+        return;
+      }
+      const avg=Math.round(totalRent/totalOccUnits);
+      state.businessPlan.bpCurrentRentParsed={avgRent:avg,totalRent,occUnits:totalOccUnits,fileCount:files.length-failed.length,unitRents:mergedUnitRents};
+      // Also push into invMetrics so the aggregate display stays in sync
+      if(state.invMetrics) state.invMetrics.unitCurrentRents=mergedUnitRents;
+      render();
+    }
+  }; inp.click();
+}
+
 function parsePropertyMetrics(prop){
   // Income statement is optional per property — aligns with single-property
   // mode. If missing, all financial fields stay at zero and the property
@@ -2977,7 +3045,7 @@ function genBpNarrative(){
   // Use per-remodel-unit averages for rent narrative when data available; fall back to portfolio-wide.
   const _lMapN=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
   const _ovRN=bp.bpLaunchRentOverrides||{};
-  const _cMapN=(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+  const _cMapN=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
   let launch,curRentPerUnit,rentNarrRemodelAvg=false;
   if(remodels.length>0&&(Object.keys(_lMapN).length||Object.keys(_ovRN).length)&&Object.keys(_cMapN).length){
     let _sl=0,_sc=0,_mc=0;
@@ -3403,7 +3471,7 @@ ${sec.businessPlan && bp.enabled ? `
     const _rmdR=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
     const _lMap=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
     const _ovR=bp.bpLaunchRentOverrides||{};
-    const _cMap=(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+    const _cMap=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
     let launch,cur,remodelAvg=false;
     if(_rmdR.length>0&&(Object.keys(_lMap).length||Object.keys(_ovR).length)&&Object.keys(_cMap).length){
       let _sl=0,_sc=0,_mc=0;
@@ -3457,7 +3525,7 @@ ${sec.businessPlan && bp.enabled ? `
       if(!remodels.length||!remodelsTotal) return '';
       const launchRents=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
       const overrides=bp.bpLaunchRentOverrides||{};
-      const currentRents=(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+      const currentRents=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
       // Per-unit ROI: only count units where we have both launch and current rent
       let totalUplift=0, roiUnits=0;
       remodels.forEach(u=>{
@@ -3842,19 +3910,24 @@ function renderInvestmentStep0(){
             })()}
           </div>
           <div>
-            <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Current Rent / Occupied Unit</label>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+              <label style="font-size:11px;font-weight:600;color:#1a3a35">Current Rent / Occupied Unit</label>
+              <button onclick="uploadBpCurrentRent()" title="Import current quarter rent roll" style="padding:4px 9px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
+            </div>
             ${(()=>{
-              const pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
-              const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
-              const totalOcc=pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
-              const cur=totalOcc>0?Math.round(totalRent/totalOcc):0;
-              const hasRentRolls=(state.invProperties||[]).some(p=>p.files&&p.files.rr3);
-              return cur>0
-                ? `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#f0fdf8;font-size:13px;color:#1a3a35;font-weight:600">$${cur.toLocaleString()} <span style="font-size:10px;font-weight:400;color:#5a8070">(from rent roll)</span></div>`
-                : hasRentRolls
-                  ? `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#fffbea;font-size:11px;color:#92400e">Build or preview the report once to calculate current rent</div>`
-                  : `<div style="padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:12px;color:#9ca3af;font-style:italic">Upload rent rolls in the Properties section</div>`;
-            })()}
+                const crp=state.businessPlan.bpCurrentRentParsed;
+                if(crp){
+                  return `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#f0fdf8;font-size:13px;color:#1a3a35;font-weight:600">$${crp.avgRent.toLocaleString()} <span style="font-size:10px;font-weight:400;color:#5a8070">(imported)</span></div>
+                  <div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ Avg $${crp.avgRent.toLocaleString()} across ${crp.occUnits} occupied units — ${crp.fileCount} file${crp.fileCount!==1?'s':''}</div>`;
+                }
+                const pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+                const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
+                const totalOcc=pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
+                const cur=totalOcc>0?Math.round(totalRent/totalOcc):0;
+                return cur>0
+                  ? `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#f0fdf8;font-size:13px;color:#1a3a35;font-weight:600">$${cur.toLocaleString()} <span style="font-size:10px;font-weight:400;color:#5a8070">(from rent roll)</span></div>`
+                  : `<div style="padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:12px;color:#9ca3af;font-style:italic">Import rent roll to calculate</div>`;
+              })()}
           </div>
         </div>
         ${(()=>{
@@ -3862,7 +3935,7 @@ function renderInvestmentStep0(){
           if(!remodels.length) return '';
           const launchRents=(state.businessPlan.bpLaunchRentParsed&&state.businessPlan.bpLaunchRentParsed.unitRents)||{};
           const overrides=state.businessPlan.bpLaunchRentOverrides||{};
-          const currentRents=(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+          const currentRents=(state.businessPlan.bpCurrentRentParsed&&state.businessPlan.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
           // Auto-refresh unit rent map if invMetrics exists but map is empty
           // (happens when a saved report is resumed without re-clicking Process)
           if(state.invMetrics&&Object.keys(currentRents).length===0&&!state._bpRentRefreshing){
