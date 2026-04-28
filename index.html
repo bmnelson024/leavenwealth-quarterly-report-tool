@@ -441,7 +441,7 @@ function _makeDefaultState(){
     invPrevMetrics: null,
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
-    businessPlan: { enabled:false, locLimit:"", locDrawn:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null },
+    businessPlan: { enabled:false, locLimit:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
     bgChampionCustom: { commentary:"", charts:[] }
@@ -633,7 +633,7 @@ function saveProgress(options){
     invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
-    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
+    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
     savedAt:new Date().toISOString()
@@ -807,7 +807,7 @@ function loadSave(key){
       invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
-      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
+      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       invReportHTML:null,
@@ -1031,7 +1031,7 @@ function selectSource(src){
   state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
   state.invNarrativesEdited = false;
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
-  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null};
+  state.businessPlan = {enabled:false,locLimit:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null};
   render();
 }
 function renderHome(){
@@ -2803,8 +2803,8 @@ ${sec.businessPlan && bp.enabled ? `
       <div style="font-size:22px;font-weight:700;color:var(--dark)">${bp.locLimit?'$'+Number(String(bp.locLimit).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
     </div>
     <div style="background:var(--dark);border-radius:8px;padding:14px 16px;">
-      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Amount Drawn</div>
-      <div style="font-size:22px;font-weight:700;color:white">${bp.locDrawn?'$'+Number(String(bp.locDrawn).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
+      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Remaining LOC</div>
+      <div style="font-size:22px;font-weight:700;color:white">${bp.locRemaining?'$'+Number(String(bp.locRemaining).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
     </div>
   </div>
   <div class="sh2">Remodel Progress</div>
@@ -3190,9 +3190,9 @@ function renderInvestmentStep0(){
             <input type="text" placeholder="e.g. 2,500,000" value="${escapeHtml(state.businessPlan.locLimit)}"
               oninput="state.businessPlan.locLimit=this.value"
               style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Amount Drawn</label>
-            <input type="text" placeholder="e.g. 1,200,000" value="${escapeHtml(state.businessPlan.locDrawn)}"
-              oninput="state.businessPlan.locDrawn=this.value"
+          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Remaining LOC</label>
+            <input type="text" placeholder="e.g. 1,300,000" value="${escapeHtml(state.businessPlan.locRemaining)}"
+              oninput="state.businessPlan.locRemaining=this.value"
               style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
         </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
