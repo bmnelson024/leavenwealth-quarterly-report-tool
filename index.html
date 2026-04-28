@@ -45,6 +45,7 @@
   .process-btn { margin-top: 12px; width: 100%; padding: 12px 0; border-radius: 8px; border: none; background: #1a3a35; color: white; font-weight: 700; font-size: 15px; cursor: pointer; font-family: Inter, sans-serif; }
   .process-btn:disabled { background: #e5e7eb; color: #9ca3af; cursor: not-allowed; }
   .error-box { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; color: #dc2626; font-size: 13px; }
+  .warning-box { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; color: #92400e; font-size: 13px; }
   .metric-box { background: #e6f9f4; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
   .metric-box-title { font-size: 12px; font-weight: 700; color: #1a3a35; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -167,6 +168,7 @@
   <div id="home-link"></div>
   <div class="steps" id="steps-indicator"></div>
   <div id="error-box" class="error-box" style="display:none"></div>
+  <div id="warning-box" class="warning-box" style="display:none"></div>
   <div id="step-content"></div>
 </div>
 </div><!-- /#app-root -->
@@ -1068,6 +1070,7 @@ function renderHome(){
   document.getElementById("home-link").innerHTML="";
   document.getElementById("steps-indicator").innerHTML="";
   document.getElementById("error-box").style.display="none";
+  clearWarning();
   const saves=getSavesIndex();
   const fmtDate=iso=>{try{const d=new Date(iso);return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})+" at "+d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});}catch(e){return iso;}};
   const stepLabel=s=>s>=2?"Narratives ready":s===1?"Metrics reviewed":"Uploaded";
@@ -2855,6 +2858,11 @@ function parsePropertyMetrics(prop){
       if(!totalIncome && !totalExpense){
         showError("Warning: Income statement for \""+prop.name+"\" parsed but contained no totals. Verify the file format.");
       }
+      if(!hasPropTaxLine(_propIncomeRows)){
+        // Accumulate per-property warnings; shown after all properties are processed
+        if(!window._propTaxMissingProps) window._propTaxMissingProps=[];
+        window._propTaxMissingProps.push(prop.name);
+      }
     } else {
       showError("Warning: Could not parse Income Statement for \""+prop.name+"\". Income / expense / NOI for that property will be $0.");
     }
@@ -3044,6 +3052,22 @@ function processInvestmentData(opts){
     const totalCapex=results.reduce((s,m)=>s+(m.capex||0),0);
     const unitCurrentRents=_buildUnitCurrentRents();
     state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents};
+    // Show property tax warning if any properties were missing a tax line item
+    if(window._propTaxMissingProps && window._propTaxMissingProps.length>0){
+      const names=window._propTaxMissingProps;
+      const plural=names.length>1;
+      showWarning(
+        `⚠️ <strong>Property tax not detected</strong> in the income statement for ` +
+        `<strong>${names.join(', ')}</strong>. ` +
+        `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found${plural?' in these properties':''}. ` +
+        `If taxes are paid semi-annually rather than monthly, quarter-over-quarter expense comparisons will be skewed. ` +
+        `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`
+      );
+      window._propTaxMissingProps=[];
+    } else {
+      clearWarning();
+      window._propTaxMissingProps=[];
+    }
     // Auto-fill Business Plan Units Remaining now that we know totalUnits
     // (handles the case where the CapEx file was imported before the report was processed)
     if(state.businessPlan&&state.businessPlan.unitsCompleted&&totalUnitsPortfolio>0){
@@ -4179,11 +4203,14 @@ function processDataAppFolio() {
         if (!totalIncome && !totalExpense) {
           showError("Warning: Income Statement parsed but contained no totals. Verify the file is a 12-month AppFolio statement and the quarter is set correctly.");
         }
+        warnIfNoPropTax(incomeRows, state.propertyName||"");
       } else {
         showError("Warning: Could not parse the Income Statement file. Income / expense / NOI will show as $0.");
+        clearWarning();
       }
     } else {
       showError("Warning: No Income Statement uploaded. Income / expense / NOI / capex will show as $0 on the report.");
+      clearWarning();
     }
     // ── Rent Rolls — occupancy ───────────────────────────────────────────────
     const occ1 = calcOccAppFolio(state.files.rr1);
@@ -4345,11 +4372,14 @@ function processBuildium() {
         if (!totalIncome && !totalExpense) {
           showError("Warning: Income Statement parsed but contained no totals. Verify the file is a standard Buildium income statement.");
         }
+        warnIfNoPropTax(incomeRows, state.propertyName||"");
       } else {
         showError("Warning: Could not parse the Income Statement file. Income / expense / NOI will show as $0.");
+        clearWarning();
       }
     } else {
       showError("Warning: No Income Statement uploaded. Income / expense / NOI / capex will show as $0 on the report.");
+      clearWarning();
     }
     const occ1=calcOcc(state.files.rr1,"rr1"), occ2=calcOcc(state.files.rr2,"rr2"), occ3=calcOcc(state.files.rr3,"rr3");
     const occupancy=Math.round((occ1+occ2+occ3)/3);
@@ -5774,6 +5804,41 @@ function tryAutoFillPropertyName(csvText){
 function showError(msg){
   const el=document.getElementById("error-box");
   el.textContent=msg; el.style.display=msg?"block":"none";
+}
+function showWarning(msg){
+  const el=document.getElementById("warning-box");
+  if(!el) return;
+  el.innerHTML=msg; el.style.display=msg?"block":"none";
+}
+function clearWarning(){ showWarning(""); }
+
+// ── Property tax detection ────────────────────────────────────────────────
+// Returns true if the income statement rows contain a line item that looks like
+// a property tax or escrow entry. Add more patterns here as new PM labels emerge.
+const PROP_TAX_PATTERNS = [
+  /property\s+tax/i,
+  /mortgage\s+escrow/i,
+  /tax\s+escrow/i,
+  /real\s+estate\s+tax/i,
+  /prop\.?\s+tax/i,
+  /county\s+tax/i,
+];
+function hasPropTaxLine(incomeRows){
+  if(!incomeRows || !incomeRows.length) return false;
+  return incomeRows.some(row => PROP_TAX_PATTERNS.some(p => p.test(row.label||"")));
+}
+function warnIfNoPropTax(incomeRows, propertyName){
+  if(hasPropTaxLine(incomeRows)){
+    clearWarning();
+  } else {
+    const who = propertyName ? `<strong>${propertyName}</strong>` : "this property";
+    showWarning(
+      `⚠️ <strong>Property tax not detected</strong> in the income statement for ${who}. ` +
+      `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found. ` +
+      `If property taxes are paid semi-annually rather than monthly, the quarter's expenses will be skewed. ` +
+      `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`
+    );
+  }
 }
 function fileRow(key, label, hint, isExcel, onLoad){
   const done=!!state.files[key];
