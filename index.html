@@ -2915,7 +2915,7 @@ function refreshUnitCurrentRents(){
     render();
   }
 }
-function processInvestmentData(){
+function processInvestmentData(opts){
   try{
     showError("");
     const results=[];
@@ -3006,7 +3006,8 @@ function processInvestmentData(){
     } else {
       showToast("✓ Processed — your edited narratives preserved");
     }
-    state.step=1; state._savedThisStep=false; render();
+    if(!(opts&&opts.stayOnStep)){state.step=1;}
+    state._savedThisStep=false; render();
   }catch(e){showError("Error: "+e.message);}
 }
 function genInvestmentNarratives(m){
@@ -3837,6 +3838,9 @@ function renderInvestmentStep0(){
       </label>
       ${state.businessPlan.enabled?`
       <div style="margin-top:14px;border-top:1px solid #c8e6de;padding-top:14px">
+        <button onclick="processInvestmentData({stayOnStep:true})" style="width:100%;padding:10px 0;margin-bottom:16px;border-radius:8px;border:none;background:#1a3a35;color:white;font-weight:700;font-size:13px;cursor:pointer;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;gap:8px">
+          ↺ Refresh All Data
+        </button>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Completed</label>
