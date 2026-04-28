@@ -1876,7 +1876,11 @@ async function rewriteWithClaude(kind){
       try {
         const body = await e.context.text();
         const parsed = JSON.parse(body);
-        if (parsed && parsed.error) msg = parsed.error;
+        if (parsed && parsed.error) {
+          msg = parsed.error;
+          if (parsed.status) msg += ` (HTTP ${parsed.status})`;
+          if (parsed.detail) msg += ` — ${String(parsed.detail).slice(0, 300)}`;
+        }
       } catch(_) { /* ignore parse failures — keep original message */ }
     }
     showError("Claude rewrite failed: " + msg + ". Existing narratives left unchanged.");
