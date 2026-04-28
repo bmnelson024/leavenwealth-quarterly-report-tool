@@ -3896,27 +3896,38 @@ function renderInvestmentStep0(){
       })()}
     </div>
     <div class="section-label">Loan & Write-off Data <span style="font-weight:400;font-size:11px;color:#9ca3af">— enter manually from loan statements</span></div>
-    <div class="econ-box" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px">
-      <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Prior Year-End)</label>
-        <input type="text" placeholder="e.g. 289,116.08" value="${state.invLoan.principalInception}"
-          oninput="state.invLoan.principalInception=this.value"
-          style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-      <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Prior Year-End Date (for label)</label>
-        <input type="text" placeholder="e.g. 12/31/2024" value="${state.invLoan.principalInceptionDate||""}"
-          oninput="state.invLoan.principalInceptionDate=this.value"
-          style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-      <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Current)</label>
-        <input type="text" placeholder="e.g. 438,302.06" value="${state.invLoan.principalCurrent}"
-          oninput="state.invLoan.principalCurrent=this.value"
-          style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-      <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Date (for label)</label>
-        <input type="text" placeholder="e.g. 12/31/2025" value="${state.invLoan.principalCurrentDate}"
-          oninput="state.invLoan.principalCurrentDate=this.value"
-          style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-      <div style="grid-column:span 4"><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Total Write-offs from Inception</label>
-        <input type="text" placeholder="e.g. 3,054,449" value="${state.invLoan.writeoffs}"
+    <div class="econ-box" style="margin-bottom:12px">
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:${state.invSections.loanPrincipal?'12':'0'}px;cursor:pointer">
+        <input type="checkbox" ${state.invSections.loanPrincipal?"checked":""} onchange="state.invSections.loanPrincipal=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
+        <span style="font-size:12px;font-weight:600;color:#1a3a35">Include Loan Principal Paid in report</span>
+      </label>
+      ${state.invSections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;padding-top:2px">
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Prior Year-End)</label>
+          <input type="text" placeholder="e.g. 289,116.08" value="${state.invLoan.principalInception}"
+            oninput="state.invLoan.principalInception=this.value"
+            style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Prior Year-End Date (for label)</label>
+          <input type="text" placeholder="e.g. 12/31/2024" value="${state.invLoan.principalInceptionDate||""}"
+            oninput="state.invLoan.principalInceptionDate=this.value"
+            style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Current)</label>
+          <input type="text" placeholder="e.g. 438,302.06" value="${state.invLoan.principalCurrent}"
+            oninput="state.invLoan.principalCurrent=this.value"
+            style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Date (for label)</label>
+          <input type="text" placeholder="e.g. 12/31/2025" value="${state.invLoan.principalCurrentDate}"
+            oninput="state.invLoan.principalCurrentDate=this.value"
+            style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+      </div>`:''}
+      <div style="border-top:1px solid #e5e7eb;margin-top:${state.invSections.loanPrincipal?'14':'10'}px;padding-top:12px">
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:${state.invSections.writeoffs?'10':'0'}px;cursor:pointer">
+          <input type="checkbox" ${state.invSections.writeoffs?"checked":""} onchange="state.invSections.writeoffs=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
+          <span style="font-size:12px;font-weight:600;color:#1a3a35">Include Total Write-offs in report</span>
+        </label>
+        ${state.invSections.writeoffs?`<input type="text" placeholder="e.g. 3,054,449" value="${state.invLoan.writeoffs}"
           oninput="state.invLoan.writeoffs=this.value"
-          style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+          style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>`:''}
+      </div>
     </div>
     <div class="section-label">Business Plan Mode <span style="font-weight:400;font-size:11px;color:#9ca3af">— for deals still in remodel / LOC phase</span></div>
     <div class="econ-box" style="margin-bottom:12px">
