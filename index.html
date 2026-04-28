@@ -3096,6 +3096,10 @@ ${sec.businessPlan && bp.enabled ? `
       const remaining=budget-spent;
       const capexItems=(bp.bpCapexParsed&&bp.bpCapexParsed.items)||[];
       const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
+      const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
+      const avgPerUnit=remodels.length>0?Math.round(remodelsTotal/remodels.length):0;
+      const otherCapex=spent>remodelsTotal?Math.round(spent-remodelsTotal):0;
+      const remodelPct=spent>0?Math.round(remodelsTotal/spent*100):0;
       return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
         <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
           <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Total Budget</div>
@@ -3114,9 +3118,31 @@ ${sec.businessPlan && bp.enabled ? `
       <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
       </div>`:""}
+      ${spent>0&&remodels.length>0?`
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        <div style="background:#e6f9f4;border-radius:8px;padding:12px 14px;border-left:3px solid #00c48c;">
+          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Unit Remodel Spend</div>
+          <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${remodelsTotal.toLocaleString()}</div>
+          <div style="font-size:10px;color:#5a8070;margin-top:2px">${remodelPct}% of total capex</div>
+        </div>
+        <div style="background:#f3f4f6;border-radius:8px;padding:12px 14px;border-left:3px solid #9ca3af;">
+          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Other Capital Work</div>
+          <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${otherCapex.toLocaleString()}</div>
+          <div style="font-size:10px;color:#5a8070;margin-top:2px">${100-remodelPct}% of total capex</div>
+        </div>
+        <div style="background:#1a3a35;border-radius:8px;padding:12px 14px;">
+          <div style="font-size:9px;color:#00c48c;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Avg Cost / Remodeled Unit</div>
+          <div style="font-size:18px;font-weight:700;color:white;">$${avgPerUnit.toLocaleString()}</div>
+          <div style="font-size:10px;color:#00c48c;margin-top:2px">${remodels.length} unit${remodels.length!==1?'s':''} remodeled</div>
+        </div>
+      </div>
+      <div style="margin-bottom:4px;display:flex;justify-content:space-between;font-size:10px;color:#5a8070"><span>Remodel spend vs. other capital work</span><span>${remodelPct}% / ${100-remodelPct}%</span></div>
+      <div style="height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;margin-bottom:16px;">
+        <div style="height:100%;width:${remodelPct}%;background:#00c48c;border-radius:4px;"></div>
+      </div>`:''}
       ${remodels.length>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;">
         <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Remodeled Units (${remodels.length})</div>
-        <div style="font-size:10px;color:var(--muted)">Total: $${remodels.reduce((s,u)=>s+u.totalCost,0).toLocaleString()}</div>
+        <div style="font-size:10px;color:var(--muted)">Total: $${remodelsTotal.toLocaleString()}</div>
       </div>
       <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:14px;">
         <div style="display:grid;grid-template-columns:auto 1fr auto auto auto auto auto auto;gap:0;background:#f0fdf8;padding:5px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">
