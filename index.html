@@ -822,8 +822,9 @@ function loadSave(key){
       narrativesEdited: hasNarrativeContent(data.narratives||{}),
       invNarrativesEdited: hasNarrativeContent(data.invNarratives||{})
     };
-    // Backfill expenseCategories for old saves that predate this field
+    // Backfill fields for old saves that predate them
     if(state.invMetrics && !state.invMetrics.expenseCategories) state.invMetrics.expenseCategories=[];
+    if(state.invMetrics && !state.invMetrics.unitCurrentRents) state.invMetrics.unitCurrentRents={};
     // Restore investment property files (saved separately, like charts)
     applyInvFiles(state.invProperties, loadInvFilesForKey(key));
     // Rebuild row arrays from restored files. Saved metrics omit rentRollRows /
@@ -1242,16 +1243,18 @@ const getUnitId = r => {
   for (const k of keys) { if (r[k] && r[k].trim()) return r[k].trim(); }
   return "";
 };
-// normUnitKey: strips common prefixes ("Unit", "Apt", "#") and returns a
-// normalized lowercase key for unit number matching across files.
-// "Unit 1810 - Something" → "1810", "APT 2A" → "2a", "1810" → "1810"
+// normUnitKey: strips common prefixes ("Unit", "Apt", "#") and trailing
+// descriptions, returning a normalized lowercase key for unit matching.
+// "Unit 1810 - Something" → "1810", "1810 - 2BR/1BA" → "1810",
+// "APT 2A" → "2a", "1810" → "1810"
 function normUnitKey(raw){
   const s=String(raw||"").trim();
-  const m=s.match(/^(?:unit|apt|apartment|suite|ste|#|unit#)\s*[#-]?\s*([a-z0-9]+)/i);
+  // Strip known prefix words first
+  const stripped=s.replace(/^(?:unit|apt|apartment|suite|ste|#)\s*[#\-]?\s*/i,'').trim();
+  // Take the first contiguous alphanumeric token (stops at space, dash, slash, etc.)
+  const m=stripped.match(/^([a-z0-9]+)/i);
   if(m) return m[1].toLowerCase();
-  // If it's already just alphanumeric (e.g. "1810" or "2A"), use as-is
-  if(/^[a-z0-9]+$/i.test(s)) return s.toLowerCase();
-  return s.toLowerCase().replace(/[^a-z0-9]/g,'');
+  return '';
 }
 
 // getVacantFlag: returns true if the row indicates a vacant unit.
@@ -3362,9 +3365,11 @@ ${sec.businessPlan && bp.enabled ? `
         if(launchR>0&&curR>0){totalUplift+=(curR-launchR);roiUnits++;}
       });
       const hasPerUnit=roiUnits>0;
-      // Fallback to portfolio averages if no per-unit data matched
-      const avgLaunch=hasPerUnit?Math.round(remodels.reduce((s,u)=>{const nk=normUnitKey(u.unit);return s+(launchRents[nk]||overrides[nk]||0);},0)/roiUnits):launch;
-      const avgCur=hasPerUnit?Math.round(remodels.reduce((s,u)=>{const nk=normUnitKey(u.unit);const curR=currentRents[nk]||0;return curR>0?s+curR:s;},0)/roiUnits):cur;
+      // Fallback to portfolio averages if no per-unit data matched.
+      // For averages, only sum units where BOTH launch AND current rent are known
+      // so the numerator and denominator always agree on which units are included.
+      const avgLaunch=hasPerUnit?Math.round(remodels.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=launchRents[nk]||overrides[nk]||0;const cr=currentRents[nk]||0;return(lr>0&&cr>0)?s+lr:s;},0)/roiUnits):launch;
+      const avgCur=hasPerUnit?Math.round(remodels.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=launchRents[nk]||overrides[nk]||0;const cr=currentRents[nk]||0;return(lr>0&&cr>0)?s+cr:s;},0)/roiUnits):cur;
       const monthlyUplift=hasPerUnit?Math.round(totalUplift/roiUnits):cur-launch;
       const annualUplift=Math.round(monthlyUplift*12*(hasPerUnit?roiUnits:remodels.length));
       const roi=remodelsTotal>0?Math.round(annualUplift/remodelsTotal*100*10)/10:null;
