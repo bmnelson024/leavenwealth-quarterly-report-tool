@@ -1644,9 +1644,13 @@ function fixInvPropertyNameRefs(text, propertyMetrics){
   for(const p of propertyMetrics){
     if(!p.name || !p.unitCount) continue;
     const n = p.unitCount;
-    // Match: "the 23-unit property", "a 23-unit property", "23-unit property", etc.
-    const pat = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\s+propert(?:y|ies)\\b`, 'gi');
+    // Match: "the 70-unit property/asset/building/community/development/project/portfolio/complex"
+    const nouns = 'propert(?:y|ies)|asset|building|community|development|project|complex|portfolio';
+    const pat = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\s+(?:${nouns})\\b`, 'gi');
     result = result.replace(pat, p.name);
+    // Also catch bare "the [N]-unit" references at end of sentence or before punctuation
+    const pat2 = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\b(?!\\s+(?:${nouns}))`, 'gi');
+    result = result.replace(pat2, p.name);
   }
   return result;
 }
