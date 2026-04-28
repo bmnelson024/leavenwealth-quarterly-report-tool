@@ -2885,6 +2885,7 @@ function invChartRow(key,label){
     <div style="flex:1;min-width:0"><div class="chart-label">${label}</div><div class="chart-filename">${key}.png</div></div>
     ${done?`<img class="chart-thumb" src="${state.invCharts[key]}"/>`:""}
     <button class="upload-btn${done?" done":""}" onclick="loadInvChart('${key}')">${done?"✓":"Upload"}</button>
+    ${done?`<button onclick="clearInvChart('${key}')" title="Remove chart" style="background:white;color:#c0392b;border:1px solid #c0392b;border-radius:6px;font-size:12px;font-weight:600;padding:5px 10px;cursor:pointer;margin-left:4px">✕</button>`:""}
   </div>`;
 }
 function renderInvestmentStep0(){
@@ -3604,6 +3605,16 @@ function loadChart(key){
     r.readAsDataURL(f);
   };
   inp.click();
+}
+function clearChart(key){
+  state.charts[key]=null;
+  saveChartsForKey(currentSaveKey(),state.charts);
+  render();
+}
+function clearInvChart(key){
+  state.invCharts[key]=null;
+  saveInvChartsForKey(currentSaveKey(),state.invCharts);
+  render();
 }
 // ─── CHART FILENAME MAPPING ───────────────────────────────────────────────────
 // Order matters — more specific patterns must come before substrings of themselves
@@ -4863,6 +4874,7 @@ function chartRow(key, label){
     </div>
     ${done?`<img class="chart-thumb" src="${state.charts[key]}"/>`:"" }
     <button class="upload-btn${done?" done":""}" onclick="loadChart('${key}')">${done?"✓":"Upload"}</button>
+    ${done?`<button onclick="clearChart('${key}')" title="Remove chart" style="background:white;color:#c0392b;border:1px solid #c0392b;border-radius:6px;font-size:12px;font-weight:600;padding:5px 10px;cursor:pointer;margin-left:4px">✕</button>`:""}
   </div>`;
 }
 function buildAssetFactsInputs(){
