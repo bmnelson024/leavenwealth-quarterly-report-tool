@@ -441,7 +441,7 @@ function _makeDefaultState(){
     invPrevMetrics: null,
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
-    businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null },
+    businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
     bgChampionCustom: { commentary:"", charts:[] }
@@ -633,7 +633,7 @@ function saveProgress(options){
     invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
-    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
+    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null},
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
     savedAt:new Date().toISOString()
@@ -807,7 +807,7 @@ function loadSave(key){
       invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
-      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
+      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null},
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       invReportHTML:null,
@@ -1031,7 +1031,7 @@ function selectSource(src){
   state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
   state.invNarrativesEdited = false;
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
-  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null};
+  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null};
   render();
 }
 function renderHome(){
@@ -2393,6 +2393,73 @@ function uploadBpCapex(){
   }; inp.click();
 }
 
+// uploadBpLaunchRent: imports one or more rent rolls from the time of purchase
+// (AppFolio or Buildium format) and calculates avg rent per occupied unit.
+// Auto-fills state.businessPlan.launchRentPerUnit; manual field stays editable.
+function uploadBpLaunchRent(){
+  const inp=document.createElement("input");
+  inp.type="file"; inp.accept=".xlsx,.xls,.csv,.tsv,.txt"; inp.multiple=true;
+  inp.onchange=e=>{
+    const files=Array.from(e.target.files); if(!files.length) return;
+    let totalRent=0, totalOccUnits=0, done=0, failed=[];
+
+    function tryExtract(raw, isBuffer){
+      let rows=[];
+      if(isBuffer){
+        try{
+          const wb=XLSX.read(raw,{type:"array"});
+          const ws=wb.Sheets[wb.SheetNames[0]];
+          // Convert to array-of-objects using first row as headers
+          rows=XLSX.utils.sheet_to_json(ws,{defval:""});
+        }catch(_){ return null; }
+        // Filter: try Buildium pattern first, fall back to AppFolio
+        const bdRows=rows.filter(isBuildiumUnitRow);
+        if(bdRows.length>0) rows=bdRows;
+        else rows=rows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+      } else {
+        // Text: try Buildium (needs skipMetaRows) first
+        const bdRows=parseDelim(skipMetaRows(raw||"")).filter(isBuildiumUnitRow);
+        if(bdRows.length>0) rows=bdRows;
+        else rows=parseDelim(raw||"").filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u)&&!/^\d+\s*(bed|bath|br|ba)\b/i.test(u);});
+      }
+      if(!rows.length) return null;
+      let rent=0, occ=0;
+      rows.forEach(r=>{
+        if(!getVacantFlag(r)){
+          const rv=parseCur(r["Rent"]||r["Monthly Rent"]||r["Actual Rent"]||r["ActualRent"]||0);
+          if(rv>0){rent+=rv;occ++;}
+        }
+      });
+      return occ>0?{rent,occ}:null;
+    }
+
+    function afterAll(){
+      if(totalOccUnits===0){
+        showError("Could not extract rent data from the uploaded file(s). Expected AppFolio or Buildium rent roll format."+(failed.length?" Failed: "+failed.join(", "):""));
+        return;
+      }
+      const avg=Math.round(totalRent/totalOccUnits);
+      state.businessPlan.launchRentPerUnit=String(avg);
+      state.businessPlan.bpLaunchRentParsed={avgRent:avg,totalRent,occUnits:totalOccUnits,fileCount:files.length-failed.length};
+      render();
+      if(failed.length) showError("Could not parse "+failed.length+" file(s): "+failed.join(", "));
+    }
+
+    files.forEach(f=>{
+      const isXL=/\.(xlsx|xls)$/i.test(f.name);
+      const r=new FileReader();
+      r.onload=ev=>{
+        const res=tryExtract(ev.target.result,isXL);
+        if(!res) failed.push(f.name);
+        else{totalRent+=res.rent;totalOccUnits+=res.occ;}
+        if(++done===files.length) afterAll();
+      };
+      r.onerror=()=>{failed.push(f.name);if(++done===files.length) afterAll();};
+      if(isXL) r.readAsArrayBuffer(f); else r.readAsText(f);
+    });
+  }; inp.click();
+}
+
 function parsePropertyMetrics(prop){
   // Income statement is optional per property — aligns with single-property
   // mode. If missing, all financial fields stay at zero and the property
@@ -3235,12 +3302,16 @@ function renderInvestmentStep0(){
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div>
             <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Rent / Unit at Project Launch</label>
-            <div style="display:flex;align-items:center;border:1px solid #c8e6de;border-radius:6px;background:white;overflow:hidden">
-              <span style="padding:7px 8px;background:#e6f9f4;color:#5a8070;font-size:12px;font-weight:600">$</span>
-              <input type="text" placeholder="e.g. 750" value="${escapeHtml(state.businessPlan.launchRentPerUnit)}"
-                oninput="state.businessPlan.launchRentPerUnit=this.value"
-                style="flex:1;padding:7px 8px;border:none;outline:none;font-size:13px;font-family:Inter,sans-serif"/>
+            <div style="display:flex;gap:6px;align-items:center">
+              <div style="display:flex;align-items:center;border:1px solid #c8e6de;border-radius:6px;background:white;overflow:hidden;flex:1">
+                <span style="padding:7px 8px;background:#e6f9f4;color:#5a8070;font-size:12px;font-weight:600">$</span>
+                <input type="text" placeholder="e.g. 750" value="${escapeHtml(state.businessPlan.launchRentPerUnit)}"
+                  oninput="state.businessPlan.launchRentPerUnit=this.value;state.businessPlan.bpLaunchRentParsed=null;"
+                  style="flex:1;padding:7px 8px;border:none;outline:none;font-size:13px;font-family:Inter,sans-serif"/>
+              </div>
+              <button onclick="uploadBpLaunchRent()" title="Import from rent roll at purchase" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
             </div>
+            ${state.businessPlan.bpLaunchRentParsed?`<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ Avg $${state.businessPlan.bpLaunchRentParsed.avgRent.toLocaleString()} across ${state.businessPlan.bpLaunchRentParsed.occUnits} occupied units (${state.businessPlan.bpLaunchRentParsed.fileCount} file${state.businessPlan.bpLaunchRentParsed.fileCount!==1?"s":""})</div>`:""}
           </div>
           <div>
             <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Current Rent / Occupied Unit</label>
