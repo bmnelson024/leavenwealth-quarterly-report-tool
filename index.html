@@ -2800,6 +2800,51 @@ function parsePropertyMetrics(prop){
   const _capex = (_glCapex && _glCapex.capexItems.length > 0 && !capex) ? _glCapex.totalCapex : capex;
   return {name:prop.name,source:prop.source,occupancy,occ1,occ2,occ3,unitCount,totalIncome,totalExpense,noi,capex:_capex,capexItems:_capexItems,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:prop.source==='buildium'||!!prop.files.delinquency,newLeases,renewals,inquiries,applications,avgEconOcc,expenseCategories:propExpenseCats,remodels};
 }
+// Builds the per-unit current rent map from property rent rolls.
+// Works for both directly-uploaded files and ↑ Imported properties
+// (falls back to the source single-property save's files for imports).
+// Called by processInvestmentData() and auto-triggered by the Business Plan
+// section when the map is empty but invMetrics already exist.
+function _buildUnitCurrentRents(){
+  const map={};
+  const fileKeys=Object.keys(_dbCache).filter(k=>k.startsWith('lw_files_'));
+  console.log('[LW Debug] lw_files_ keys in cache:',fileKeys);
+  for(const prop of (state.invProperties||[])){
+    let rr3Text=(prop.files&&prop.files.rr3)||null;
+    if(!rr3Text && prop._imported && prop._importedFrom){
+      try{
+        const sf=loadFilesForKey(prop._importedFrom);
+        console.log('[LW Debug] prop "'+prop.name+'" importedFrom="'+prop._importedFrom+'" loadFilesForKey result:',sf?Object.keys(sf):'null');
+        if(sf&&sf.rr3)rr3Text=sf.rr3;
+      }catch(e){console.warn('[LW Debug] loadFilesForKey error:',e);}
+    }
+    if(!rr3Text){console.log('[LW Debug] prop "'+prop.name+'" — no rr3, skipping');continue;}
+    try{
+      const isBd=prop.source==='buildium';
+      const rows=isBd
+        ? parseDelim(skipMetaRows(rr3Text)).filter(isBuildiumUnitRow)
+        : parseDelim(rr3Text).filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+      rows.forEach(r=>{
+        if(!getVacantFlag(r)){
+          const rv=parseCur(r["Rent"]||r["Monthly Rent"]||r["Actual Rent"]||r["ActualRent"]||0);
+          const normU=normUnitKey(String(r["Unit"]||"").trim());
+          if(normU&&rv>0) map[normU]=rv;
+        }
+      });
+    }catch(_){}
+  }
+  return map;
+}
+// Re-builds unitCurrentRents on demand (e.g. when Business Plan section loads
+// before Process Investment Data has been clicked this session).
+function refreshUnitCurrentRents(){
+  if(!state.invMetrics) return;
+  const built=_buildUnitCurrentRents();
+  if(Object.keys(built).length>0){
+    state.invMetrics.unitCurrentRents=built;
+    render();
+  }
+}
 function processInvestmentData(){
   try{
     showError("");
@@ -2875,31 +2920,8 @@ function processInvestmentData(){
       _noi += (sfhInc - sfhExp) + locInc;
     }
     const totalCapex=results.reduce((s,m)=>s+(m.capex||0),0);
-    // Build portfolio-wide per-unit current rent map for Business Plan ROI
-    const unitCurrentRents={};
-    for(const prop of state.invProperties){
-      if(!prop.files||!prop.files.rr3) continue;
-      try{
-        // rr3 is stored as text (CSV/TSV) — use parseDelim, same as main processing
-        const isBd=prop.source==='buildium';
-        const rows=isBd
-          ? parseDelim(skipMetaRows(prop.files.rr3||"")).filter(isBuildiumUnitRow)
-          : parseDelim(prop.files.rr3||"").filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
-        rows.forEach(r=>{
-          if(!getVacantFlag(r)){
-            const rv=parseCur(r["Rent"]||r["Monthly Rent"]||r["Actual Rent"]||r["ActualRent"]||0);
-            const rawUnit=String(r["Unit"]||"").trim();
-            const normU=normUnitKey(rawUnit);
-            if(normU&&rv>0) unitCurrentRents[normU]=rv;
-          }
-        });
-      }catch(_){}
-    }
+    const unitCurrentRents=_buildUnitCurrentRents();
     state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents};
-    // DEBUG: expose unit key samples to console for matching diagnostics (remove after fix)
-    window._lwDbgCurrentRentKeys = Object.keys(unitCurrentRents).slice(0,20);
-    console.log('[LW Debug] unitCurrentRents sample keys:', window._lwDbgCurrentRentKeys);
-    console.log('[LW Debug] unitCurrentRents total entries:', Object.keys(unitCurrentRents).length);
     // Auto-fill Business Plan Units Remaining now that we know totalUnits
     // (handles the case where the CapEx file was imported before the report was processed)
     if(state.businessPlan&&state.businessPlan.unitsCompleted&&totalUnitsPortfolio>0){
@@ -3841,6 +3863,12 @@ function renderInvestmentStep0(){
           const launchRents=(state.businessPlan.bpLaunchRentParsed&&state.businessPlan.bpLaunchRentParsed.unitRents)||{};
           const overrides=state.businessPlan.bpLaunchRentOverrides||{};
           const currentRents=(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+          // Auto-refresh unit rent map if invMetrics exists but map is empty
+          // (happens when a saved report is resumed without re-clicking Process)
+          if(state.invMetrics&&Object.keys(currentRents).length===0&&!state._bpRentRefreshing){
+            state._bpRentRefreshing=true;
+            setTimeout(()=>{state._bpRentRefreshing=false;refreshUnitCurrentRents();},0);
+          }
           const missingLaunch=remodels.filter(u=>{ const nk=normUnitKey(u.unit); return !launchRents[nk]&&!overrides[nk]; });
           if(!Object.keys(launchRents).length&&!Object.keys(overrides).length&&!Object.keys(currentRents).length) return '';
           return `<div style="margin-bottom:14px;">
