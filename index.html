@@ -3102,6 +3102,11 @@ ${sec.businessPlan && bp.enabled ? `
       const avgPerUnit=remodels.length>0?Math.round(remodelsTotal/remodels.length):0;
       const otherCapex=totalAllCapex>remodelsTotal?Math.round(totalAllCapex-remodelsTotal):0;
       const remodelPct=totalAllCapex>0?Math.round(remodelsTotal/totalAllCapex*100):0;
+      const comp=parseInt(bp.unitsCompleted)||0;
+      const rem=parseInt(bp.unitsRemaining)||0;
+      const totalUnits=comp+rem;
+      const unitsPct=totalUnits>0?Math.min(100,Math.round(comp/totalUnits*100)):0;
+      const delta=budget>0&&totalUnits>0?pct-unitsPct:null;
       return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
         <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
           <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Total Budget</div>
@@ -3116,7 +3121,33 @@ ${sec.businessPlan && bp.enabled ? `
           <div style="font-size:20px;font-weight:700;color:var(--dark)">${budget>0?'$'+remaining.toLocaleString():"—"}</div>
         </div>
       </div>
-      ${budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Budget utilization</span><span>${pct}%</span></div>
+      ${budget>0&&totalUnits>0?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div style="background:#f9fffe;border:1px solid #c8e6de;border-radius:8px;padding:12px 14px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+            <div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Budget Spent</div>
+            <div style="font-size:18px;font-weight:700;color:var(--dark)">${pct}%</div>
+          </div>
+          <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+            <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:4px;"></div>
+          </div>
+        </div>
+        <div style="background:#f9fffe;border:1px solid #c8e6de;border-radius:8px;padding:12px 14px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+            <div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Units Complete</div>
+            <div style="font-size:18px;font-weight:700;color:var(--dark)">${unitsPct}%</div>
+          </div>
+          <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+            <div style="height:100%;width:${unitsPct}%;background:#00c48c;border-radius:4px;"></div>
+          </div>
+        </div>
+      </div>
+      ${delta!==null?`<div style="font-size:10px;color:${Math.abs(delta)<=5?'#166534':delta>5?'#92400e':'#1e40af'};background:${Math.abs(delta)<=5?'#f0fdf4':delta>5?'#fffbeb':'#eff6ff'};border-radius:6px;padding:7px 12px;margin-bottom:14px;text-align:center;">
+        ${Math.abs(delta)<=5
+          ? `Budget spend and unit completion are well aligned (${pct}% spent / ${unitsPct}% complete)`
+          : delta>5
+            ? `Spending is running ${delta}pp ahead of unit completion (${pct}% spent / ${unitsPct}% complete)`
+            : `Unit completion is running ${Math.abs(delta)}pp ahead of spend (${unitsPct}% complete / ${pct}% spent)`}
+      </div>`:''}`:budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Budget utilization</span><span>${pct}%</span></div>
       <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
       </div>`:""}
@@ -3142,35 +3173,14 @@ ${sec.businessPlan && bp.enabled ? `
       <div style="height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;margin-bottom:16px;">
         <div style="height:100%;width:${remodelPct}%;background:#00c48c;border-radius:4px;"></div>
       </div>`:'<div style="height:8px;margin-bottom:16px;"></div>'}`:''}
-      ${remodels.length>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;">
-        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Remodeled Units (${remodels.length})</div>
-        <div style="font-size:10px;color:var(--muted)">Total: $${remodelsTotal.toLocaleString()}</div>
-      </div>
-      <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:14px;">
-        <table style="width:100%;border-collapse:collapse;font-size:10px;">
-          <thead>
-            <tr style="background:#f0fdf8;">
-              <th style="text-align:left;padding:6px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Unit</th>
-              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Labor</th>
-              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Appl.</th>
-              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Carpet/Floor</th>
-              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Materials</th>
-              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Paint</th>
-              <th style="text-align:right;padding:6px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${remodels.map((u,i)=>`<tr style="background:${i%2===0?'white':'#f9fffe'};border-top:1px solid #f0f0f0;">
-              <td style="padding:6px 10px;font-weight:700;color:var(--dark);white-space:nowrap;">${escapeHtml(u.unit)}</td>
-              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${u.laborCost>0?'$'+Math.round(u.laborCost).toLocaleString():'—'}</td>
-              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${u.applianceCost>0?'$'+Math.round(u.applianceCost).toLocaleString():'—'}</td>
-              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${(u.carpetCost+u.flooringCost)>0?'$'+Math.round(u.carpetCost+u.flooringCost).toLocaleString():'—'}</td>
-              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${(u.materialsCost+u.blindsCost)>0?'$'+Math.round(u.materialsCost+u.blindsCost).toLocaleString():'—'}</td>
-              <td style="padding:6px 8px;text-align:right;color:var(--muted);">${u.paintCost>0?'$'+Math.round(u.paintCost).toLocaleString():'—'}</td>
-              <td style="padding:6px 10px;text-align:right;font-weight:700;color:var(--dark);">$${Math.round(u.totalCost).toLocaleString()}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
+      ${remodels.length>0?`<div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#f0fdf8;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Remodeled Units</div>
+          <div style="font-size:13px;font-weight:700;color:var(--dark)">${remodels.length} units &nbsp;·&nbsp; $${remodelsTotal.toLocaleString()}</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;padding:10px 14px;">
+          ${remodels.map(u=>`<span style="background:white;border:1px solid #e5e7eb;border-radius:4px;padding:3px 8px;font-size:10px;color:var(--dark);font-weight:600">${escapeHtml(u.unit)}</span>`).join('')}
+        </div>
       </div>`:""}
       ${capexItems.length>0?`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Capital Spend by Category</div>
       <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
