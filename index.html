@@ -2466,11 +2466,11 @@ function parseBpCapexBuildium(fileData){
       const row=rawRows[i]||[];
       const col0=String(row[0]||"").trim();
       const col0L=col0.toLowerCase();
-      // Explicitly skip all Buildium summary/balance rows regardless of other
-      // columns — these carry subtotals that would double-count if treated as
-      // transaction rows. Covers: "Total for ...", "Net Change", "Ending Balance",
-      // "Opening Balance", "Beginning Balance", "Grand Total".
-      if(/^(total\b|grand total|net\s+change|ending\s+bal|opening\s+bal|beginning\s+bal)/i.test(col0)) continue;
+      // Skip summary/balance rows by scanning EVERY cell — Buildium Excel exports
+      // often put "Total for..." in a column other than the first, so checking
+      // only col0 misses them and their subtotals get double-counted.
+      const SUMMARY_RE=/^(total\b|grand total|net\s+change|ending\s+bal|opening\s+bal|beginning\s+bal)/i;
+      if(row.some(c=>SUMMARY_RE.test(String(c||"").trim()))) continue;
       const dateVal=row[colDate>=0?colDate:0];
       const isDate=dateVal instanceof Date||typeof dateVal==="number"||/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(String(dateVal));
       const nameVal=String(row[colName>=0?colName:3]||"").trim();
@@ -2549,6 +2549,7 @@ function parseBpCapexBuildium(fileData){
       .filter(i=>i.amount>0)
       .sort((a,b)=>b.amount-a.amount);
 
+    console.log("[BpCapex] totalCapex:",Math.round(capTotal),"sections found:",Object.keys(bySection),"remodels:",remodels.length);
     return{totalCapex:Math.round(capTotal),remodels,remodelsCount:remodels.length,items,itemCount:items.length};
   }catch(e){console.warn("parseBpCapexBuildium failed:",e);return null;}
 }
