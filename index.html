@@ -2377,7 +2377,12 @@ function uploadBpCapex(){
       const items=(parsed.items||[]).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
       state.businessPlan.spentToDate=String(Math.round(parsed.totalCapex));
       const rc=parsed.remodelsCount||0;
-      if(rc>0) state.businessPlan.unitsCompleted=String(rc);
+      if(rc>0){
+        state.businessPlan.unitsCompleted=String(rc);
+        // Auto-fill Units Remaining = total units from rent rolls minus completed
+        const totalU=(state.invMetrics&&state.invMetrics.totalUnits)||0;
+        if(totalU>rc) state.businessPlan.unitsRemaining=String(totalU-rc);
+      }
       state.businessPlan.bpCapexParsed={
         itemCount:items.length, items,
         remodels:parsed.remodels||null,
@@ -2461,10 +2466,11 @@ function parseBpCapexBuildium(fileData){
       const row=rawRows[i]||[];
       const col0=String(row[0]||"").trim();
       const col0L=col0.toLowerCase();
-      // Explicitly skip any summary/total rows regardless of other columns —
-      // Buildium "Total for [section]" rows carry the subtotal in the Amount
-      // column and would double-count if treated as data rows.
-      if(/^(total\b|grand total)/i.test(col0)) continue;
+      // Explicitly skip all Buildium summary/balance rows regardless of other
+      // columns — these carry subtotals that would double-count if treated as
+      // transaction rows. Covers: "Total for ...", "Net Change", "Ending Balance",
+      // "Opening Balance", "Beginning Balance", "Grand Total".
+      if(/^(total\b|grand total|net\s+change|ending\s+bal|opening\s+bal|beginning\s+bal)/i.test(col0)) continue;
       const dateVal=row[colDate>=0?colDate:0];
       const isDate=dateVal instanceof Date||typeof dateVal==="number"||/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(String(dateVal));
       const nameVal=String(row[colName>=0?colName:3]||"").trim();
@@ -3535,9 +3541,12 @@ function renderInvestmentStep0(){
               const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
               const totalOcc=pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
               const cur=totalOcc>0?Math.round(totalRent/totalOcc):0;
+              const hasRentRolls=(state.invProperties||[]).some(p=>p.files&&p.files.rr3);
               return cur>0
                 ? `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#f0fdf8;font-size:13px;color:#1a3a35;font-weight:600">$${cur.toLocaleString()} <span style="font-size:10px;font-weight:400;color:#5a8070">(from rent roll)</span></div>`
-                : `<div style="padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:12px;color:#9ca3af;font-style:italic">Upload rent rolls to auto-calculate</div>`;
+                : hasRentRolls
+                  ? `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#fffbea;font-size:11px;color:#92400e">Build or preview the report once to calculate current rent</div>`
+                  : `<div style="padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:12px;color:#9ca3af;font-style:italic">Upload rent rolls in the Properties section</div>`;
             })()}
           </div>
         </div>
