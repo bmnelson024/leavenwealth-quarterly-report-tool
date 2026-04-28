@@ -1797,6 +1797,7 @@ async function rewriteWithClaude(kind){
       const _pm = (metrics.propertyMetrics||[]);
       clean.income   = fixInvPropertyNameRefs(clean.income,   _pm);
       clean.expenses = fixInvPropertyNameRefs(clean.expenses, _pm);
+      clean.capex    = fixInvPropertyNameRefs(clean.capex,    _pm);
       clean.outlook  = fixInvPropertyNameRefs(clean.outlook,  _pm);
       // Preserve existing capex narrative if Claude didn't return one (edge function may not support it yet)
       state.invNarratives = {income:clean.income, expenses:clean.expenses, capex:clean.capex||(state.invNarratives.capex||""), outlook:clean.outlook};
