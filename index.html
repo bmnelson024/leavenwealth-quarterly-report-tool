@@ -3042,23 +3042,12 @@ function genBpNarrative(){
   const remaining=budget>0?budget-spent:0;
   const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
   const avgCost=remodels.length>0?Math.round(remodels.reduce((s,u)=>s+u.totalCost,0)/remodels.length):0;
-  // Use per-remodel-unit averages for rent narrative when data available; fall back to portfolio-wide.
-  const _lMapN=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
-  const _ovRN=bp.bpLaunchRentOverrides||{};
-  const _cMapN=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
-  let launch,curRentPerUnit,rentNarrRemodelAvg=false;
-  if(remodels.length>0&&(Object.keys(_lMapN).length||Object.keys(_ovRN).length)&&Object.keys(_cMapN).length){
-    let _sl=0,_sc=0,_mc=0;
-    remodels.forEach(u=>{const nk=normUnitKey(u.unit);const lr=_lMapN[nk]||_ovRN[nk]||0;const cr=_cMapN[nk]||0;if(lr>0&&cr>0){_sl+=lr;_sc+=cr;_mc++;}});
-    if(_mc>0){launch=Math.round(_sl/_mc);curRentPerUnit=Math.round(_sc/_mc);rentNarrRemodelAvg=true;}
-  }
-  if(!rentNarrRemodelAvg){
-    launch=parseFloat(String(bp.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
-    const _pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
-    const _totalRent=_pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
-    const _totalOcc=_pm.reduce((s,p)=>s+Math.round(((p.unitCount||0)*(p.occupancy||0)/100)),0);
-    curRentPerUnit=_totalOcc>0?Math.round(_totalRent/_totalOcc):0;
-  }
+  // Rent narrative always uses portfolio-wide averages (all occupied units), consistent with the report visual.
+  const launch=parseFloat(String(bp.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
+  const _pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+  const _totalRent=_pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
+  const _totalOcc=_pm.reduce((s,p)=>s+Math.round(((p.unitCount||0)*(p.occupancy||0)/100)),0);
+  const curRentPerUnit=_totalOcc>0?Math.round(_totalRent/_totalOcc):0;
   const rentDelta=launch>0&&curRentPerUnit>0?curRentPerUnit-launch:null;
   const rentDeltaPct=rentDelta!==null&&launch>0?Math.round(rentDelta/launch*100):null;
 
@@ -3090,21 +3079,15 @@ function genBpNarrative(){
     costSentence=` The average all-in cost per remodeled unit is $${avgCost.toLocaleString()}.`;
   }
 
-  // Rent growth sentence
+  // Rent growth sentence — portfolio-wide comparison
   let rentSentence="";
   if(rentDelta!==null&&rentDeltaPct!==null){
     if(rentDelta>0){
-      rentSentence=rentNarrRemodelAvg
-        ?` The renovation program has driven meaningful rent growth — average rent for remodeled units has increased ${rentDeltaPct}% from $${launch.toLocaleString()} at launch to $${curRentPerUnit.toLocaleString()} currently.`
-        :` The renovation program has supported meaningful rent growth — average occupied rent has increased ${rentDeltaPct}% from the $${launch.toLocaleString()} per unit launch target to $${curRentPerUnit.toLocaleString()} currently.`;
+      rentSentence=` The renovation program has supported meaningful rent growth — average occupied rent has increased ${rentDeltaPct}% from the $${launch.toLocaleString()} per unit launch target to $${curRentPerUnit.toLocaleString()} currently.`;
     } else if(rentDelta<0){
-      rentSentence=rentNarrRemodelAvg
-        ?` Average rent for remodeled units of $${curRentPerUnit.toLocaleString()} remains below the $${launch.toLocaleString()} launch average, reflecting the early stage of the renovation program.`
-        :` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit remains below the $${launch.toLocaleString()} per unit launch target, reflecting the early stage of the renovation program.`;
+      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit remains below the $${launch.toLocaleString()} per unit launch target, reflecting the early stage of the renovation program.`;
     } else {
-      rentSentence=rentNarrRemodelAvg
-        ?` Average rent for remodeled units of $${curRentPerUnit.toLocaleString()} is in line with the $${launch.toLocaleString()} launch average.`
-        :` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit is in line with the launch target.`;
+      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit is in line with the launch target.`;
     }
   }
 
@@ -3467,29 +3450,18 @@ ${sec.businessPlan && bp.enabled ? `
     })()}
   </div>
   ${(()=>{
-    // Use per-remodel-unit averages when data is available; fall back to portfolio-wide averages.
-    const _rmdR=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
-    const _lMap=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
-    const _ovR=bp.bpLaunchRentOverrides||{};
-    const _cMap=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
-    let launch,cur,remodelAvg=false;
-    if(_rmdR.length>0&&(Object.keys(_lMap).length||Object.keys(_ovR).length)&&Object.keys(_cMap).length){
-      let _sl=0,_sc=0,_mc=0;
-      _rmdR.forEach(u=>{const nk=normUnitKey(u.unit);const lr=_lMap[nk]||_ovR[nk]||0;const cr=_cMap[nk]||0;if(lr>0&&cr>0){_sl+=lr;_sc+=cr;_mc++;}});
-      if(_mc>0){launch=Math.round(_sl/_mc);cur=Math.round(_sc/_mc);remodelAvg=true;}
-    }
-    if(!remodelAvg){
-      launch=parseFloat(String(bp.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
-      const pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
-      const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
-      const totalOcc=pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
-      cur=totalOcc>0?Math.round(totalRent/totalOcc):0;
-    }
+    // "Rent at Launch vs. Today" always uses portfolio-wide averages (all occupied units).
+    // The Remodel ROI section below handles remodel-unit-specific calculations.
+    const launch=parseFloat(String(bp.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
+    const _pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+    const _totalRent=_pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
+    const _totalOcc=_pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
+    const cur=_totalOcc>0?Math.round(_totalRent/_totalOcc):0;
     if(!launch&&!cur) return '';
     const delta=launch&&cur?cur-launch:null;
     const deltaPct=launch&&cur?Math.round((cur-launch)/launch*100):null;
-    const rentSubLabel=remodelAvg?'avg, remodeled units':'per occupied unit';
-    return `<div class="sh2">Rent at Launch vs. Today${remodelAvg?' <span style="font-size:10px;font-weight:400;color:var(--muted)">(remodeled units)</span>':''}</div>
+    const rentSubLabel='avg, all occupied units';
+    return `<div class="sh2">Rent at Launch vs. Today</div>
     <div style="display:grid;grid-template-columns:1fr 1fr${delta!==null?' 1fr':''};gap:12px;margin-bottom:20px;font-family:sans-serif;">
       ${launch?`<div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
         <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Rent at Launch</div>
