@@ -3671,7 +3671,15 @@ function renderInvestmentStep0(){
               </div>
               <button onclick="uploadBpLaunchRent()" title="Import from rent roll at purchase" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
             </div>
-            ${state.businessPlan.bpLaunchRentParsed?`<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ Avg $${state.businessPlan.bpLaunchRentParsed.avgRent.toLocaleString()} across ${state.businessPlan.bpLaunchRentParsed.occUnits} occupied units (${state.businessPlan.bpLaunchRentParsed.fileCount} file${state.businessPlan.bpLaunchRentParsed.fileCount!==1?"s":""})</div>`:""}
+            ${(()=>{
+              const lrp=state.businessPlan.bpLaunchRentParsed;
+              if(!lrp) return '';
+              const totalU=(state.invMetrics&&state.invMetrics.totalUnits)||(parseInt(state.businessPlan.unitsCompleted)||0)+(parseInt(state.businessPlan.unitsRemaining)||0);
+              const impliedOcc=totalU>0?Math.round(lrp.occUnits/totalU*100):null;
+              const lowCount=totalU>0&&lrp.occUnits<totalU*0.5;
+              return `<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ Avg $${lrp.avgRent.toLocaleString()} across ${lrp.occUnits} occupied units${impliedOcc!==null?' ('+impliedOcc+'% occupancy)':''} — ${lrp.fileCount} file${lrp.fileCount!==1?'s':''}</div>
+              ${lowCount?`<div style="font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:5px 8px;margin-top:4px;">⚠️ Only ${lrp.occUnits} occupied units found out of ${totalU} total — some units may have blank or unreadable rent values. Verify the launch rent average looks correct.</div>`:''}`;
+            })()}
           </div>
           <div>
             <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Current Rent / Occupied Unit</label>
