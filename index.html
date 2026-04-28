@@ -474,6 +474,7 @@ function _makeDefaultState(){
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
     hasProForma: true,      // show "vs. Pro Forma" in single-property chart labels?
+    rewritingClaude: false, // true while the Claude narrative rewrite is in-flight
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
     bgChampionCustom: { commentary:"", charts:[] }
   };
@@ -664,6 +665,8 @@ function saveProgress(options){
     invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
+    hasProForma:state.hasProForma!==false,
+    invHasProForma:state.invHasProForma!==false,
     businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}},
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
@@ -838,6 +841,8 @@ function loadSave(key){
       invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
+      hasProForma:data.hasProForma!==false,
+      invHasProForma:data.invHasProForma!==false,
       businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}},
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
@@ -2978,6 +2983,7 @@ function refreshUnitCurrentRents(){
 function processInvestmentData(opts){
   try{
     showError("");
+    window._propTaxMissingProps=[];  // reset at start so re-runs don't accumulate duplicates
     const results=[];
     const propErrors=[];
     const currentQ=(state.currentQuarter||"").trim().toLowerCase();
@@ -3058,7 +3064,7 @@ function processInvestmentData(opts){
       const plural=names.length>1;
       showWarning(
         `⚠️ <strong>Property tax not detected</strong> in the income statement for ` +
-        `<strong>${names.join(', ')}</strong>. ` +
+        `<strong>${names.map(n=>escapeHtml(n)).join(', ')}</strong>. ` +
         `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found${plural?' in these properties':''}. ` +
         `If taxes are paid semi-annually rather than monthly, quarter-over-quarter expense comparisons will be skewed. ` +
         `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`
@@ -5831,7 +5837,7 @@ function warnIfNoPropTax(incomeRows, propertyName){
   if(hasPropTaxLine(incomeRows)){
     clearWarning();
   } else {
-    const who = propertyName ? `<strong>${propertyName}</strong>` : "this property";
+    const who = propertyName ? `<strong>${escapeHtml(propertyName)}</strong>` : "this property";
     showWarning(
       `⚠️ <strong>Property tax not detected</strong> in the income statement for ${who}. ` +
       `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found. ` +
