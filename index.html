@@ -2485,10 +2485,10 @@ function parseBpCapexBuildium(fileData){
 
       const amtRaw=colAmount>=0?row[colAmount]:0;
       const amt=typeof amtRaw==="number"?amtRaw:parseCur(String(amtRaw||"").replace(/^"|"$/g,""));
-      if(!amt||amt<=0) continue;
+      if(!amt||!Number.isFinite(amt)) continue; // skip zero/NaN but keep negatives (returns/credits)
 
-      capTotal+=amt;
-      if(COST_LC.has(curLC)){
+      capTotal+=amt; // net total: positives minus returns
+      if(amt>0&&COST_LC.has(curLC)){ // per-unit attribution: positive charges only
         if(!bySection[curLC]) bySection[curLC]=[];
         bySection[curLC].push({
           unit:unitNum(nameVal),
