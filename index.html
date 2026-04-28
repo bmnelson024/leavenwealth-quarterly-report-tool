@@ -2982,7 +2982,8 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   const fmtLoan0=(raw)=>{const n=parseFloat(String(raw||"0").replace(/[$,]/g,""));return isFinite(n)?`$${n.toLocaleString("en-US")}`:"—";};
   const loanInception=loan.principalInception?fmtLoan2(loan.principalInception):"—";
   const loanCurrent=loan.principalCurrent?fmtLoan2(loan.principalCurrent):"—";
-  const loanDate=loan.principalCurrentDate||"—";
+  const loanDate=escapeHtml(loan.principalCurrentDate||"—");
+  const loanInceptionDate=escapeHtml(loan.principalInceptionDate||("12/31/"+(prevYrNum||"")));
   const writeoffs=loan.writeoffs?fmtLoan0(loan.writeoffs):"—";
   const prev=state.invPrevMetrics;
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(2)+"%":"—";
@@ -3155,7 +3156,7 @@ ${(()=>{
     ${hasPrincipal?`<div class="loan-tile">
       <h3>Total Loan Principal Paid</h3>
       <div class="loan-inner">
-        ${loan.principalInception?`<div><div class="ll2">Inception – ${loan.principalInceptionDate||("12/31/"+(prevYrNum||""))}</div><div class="lv2">${loanInception}</div></div>`:""}
+        ${loan.principalInception?`<div><div class="ll2">Inception – ${loanInceptionDate}</div><div class="lv2">${loanInception}</div></div>`:""}
         ${loan.principalCurrent?`<div><div class="ll2">Inception – ${loanDate}</div><div class="lv2">${loanCurrent}</div></div>`:""}
       </div>
     </div>`:""}
@@ -3951,6 +3952,7 @@ function processDataAppFolio() {
       .sort((a,b)=>a.__vacant===b.__vacant?0:a.__vacant?1:-1);
     // ── Delinquency ──────────────────────────────────────────────────────────
     // From "Delinquency As Of" report — Total row, Amount Receivable column
+    if(!state.files.delinquency) showError("Warning: Delinquency file not uploaded — delinquency will show $0.");
     let delinquency = 0;
     const delinqRows = parseDelim(state.files.delinquency||"");
     const delinqTotal = delinqRows.find(r => /^total$/i.test((r["Unit"]||r["Name"]||"").trim()));
@@ -4027,18 +4029,33 @@ function processDataAppFolio() {
     }
     // ── Economic Occupancy ───────────────────────────────────────────────────
     const avgEconOcc = _econAvgStr(state.econOcc);
+    // ── Capex Detail (optional) — extract remodel info + vendor-level detail ─
+    // parseCapexDetail scans for remodeled units; parseAFCapexGL extracts
+    // vendor-level line items from an AppFolio General Ledger export.
+    const remodels = state.files.capexDetail ? parseCapexDetail(state.files.capexDetail) : null;
+    const glCapex = state.files.capexDetail
+      ? parseAFCapexGL(state.files.capexDetail, state.currentQuarter||"")
+      : null;
+    if(glCapex && glCapex.capexItems.length > 0) {
+      capexItems.splice(0, capexItems.length, ...glCapex.capexItems);
+      if(!capex) capex = glCapex.totalCapex;
+    }
     // ── Balance Sheet (optional) — renders its own page in the report ───────
     const balanceSheet = state.files.balanceSheet ? parseBalanceSheet(state.files.balanceSheet) : null;
     if(state.files.balanceSheet && !balanceSheet){
       showError("Warning: Balance Sheet file uploaded but could not be parsed — the Balance Sheet page will not appear in the report. Verify the file has 'Account Name' and 'Balance' columns.");
     }
-    state.metrics = {occupancy,occ1,occ2,occ3,unitCount:finalRows.length,totalIncome,totalExpense,noi,capex,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:true,newLeases,renewals,inquiries,applications,capexItems,avgEconOcc,rentRollRows,rentRollHeaders:rrHeaders,incomeRows,monthCols,expenseCategories:extractExpenseCats(incomeRows),balanceSheet};
+    state.metrics = {occupancy,occ1,occ2,occ3,unitCount:finalRows.length,totalIncome,totalExpense,noi,capex,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:!!state.files.delinquency,newLeases,renewals,inquiries,applications,capexItems,avgEconOcc,rentRollRows,rentRollHeaders:rrHeaders,incomeRows,monthCols,expenseCategories:extractExpenseCats(incomeRows),remodels,balanceSheet};
     // Preserve user-edited narratives on re-process. narrativesEdited is set
     // by the textarea oninput handler; legacy saves fall back to content check.
     if(!narrativesEditedFlag('single') && !hasNarrativeContent(state.narratives)){
       state.narratives = genNarratives(state.metrics);
     } else {
       showToast("✓ Processed — your edited narratives preserved");
+      // If GL capex data was just loaded and the capex narrative is still empty, auto-fill it.
+      if(glCapex && glCapex.capexItems.length > 0 && !state.narratives.capex) {
+        state.narratives.capex = genNarratives(state.metrics).capex;
+      }
     }
     state.step=1; state._savedThisStep=false; render();
   } catch(e){ showError("Error: "+e.message); }
@@ -4148,30 +4165,24 @@ function processBuildium() {
     }
     const avgEconOcc=_econAvgStr(state.econOcc);
     // ── Capex Detail (optional) — scan for remodeled units ──────────────────
+    // parseCapexDetail detects remodeled units from Buildium "Transaction Detail
+    // by Account" or AppFolio capex exports. parseAFCapexGL is AppFolio-specific
+    // and returns null on Buildium files, so it is only called from
+    // processDataAppFolio(); it is intentionally absent here.
     const remodels = state.files.capexDetail ? parseCapexDetail(state.files.capexDetail) : null;
-    // ── AppFolio GL Capex (optional) — replace generic T12 items with vendor-level detail ──
-    const glCapex = state.files.capexDetail
-      ? parseAFCapexGL(state.files.capexDetail, state.currentQuarter||"")
-      : null;
-    if(glCapex && glCapex.capexItems.length > 0) {
-      capexItems.splice(0, capexItems.length, ...glCapex.capexItems);
-      if(!capex) capex = glCapex.totalCapex;
-    }
     // ── Balance Sheet (optional) — renders its own page in the report ───────
     const balanceSheet = state.files.balanceSheet ? parseBalanceSheet(state.files.balanceSheet) : null;
     if(state.files.balanceSheet && !balanceSheet){
       showError("Warning: Balance Sheet file uploaded but could not be parsed — the Balance Sheet page will not appear in the report. Verify the file has 'Account Name' and 'Balance' columns.");
     }
     state.metrics={occupancy,occ1,occ2,occ3,unitCount:finalRows.length,totalIncome,totalExpense,noi,capex,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:!!state.files.delinquency,newLeases,renewals,inquiries,applications,capexItems,avgEconOcc,rentRollRows,rentRollHeaders:rrHeaders,incomeRows,monthCols,expenseCategories:extractExpenseCats(incomeRows),remodels,balanceSheet};
-    // Preserve user-edited narratives on re-process (AppFolio path).
+    // Preserve user-edited narratives on re-process (Buildium path).
     if(!narrativesEditedFlag('single') && !hasNarrativeContent(state.narratives)){
       state.narratives=genNarratives(state.metrics);
     } else {
       showToast("✓ Processed — your edited narratives preserved");
-      // If GL capex data was just loaded and the capex narrative is still empty, auto-fill it
-      if(glCapex && glCapex.capexItems.length > 0 && !state.narratives.capex) {
-        state.narratives.capex = genNarratives(state.metrics).capex;
-      }
+      // Note: glCapex (AppFolio GL parser) is not used in the Buildium path.
+      // Buildium capex comes from the income statement; no narrative auto-fill needed here.
     }
     state.step=1; state._savedThisStep=false; render();
   } catch(e){ showError("Error: "+e.message); }
