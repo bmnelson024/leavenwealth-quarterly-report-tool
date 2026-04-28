@@ -2834,19 +2834,12 @@ function processInvestmentData(){
     for(const prop of state.invProperties){
       if(!prop.files||!prop.files.rr3) continue;
       try{
-        const wb=XLSX.read(prop.files.rr3,{type:"array"});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        const rawArrays=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
-        let hdrIdx=-1;
-        for(let i=0;i<Math.min(15,rawArrays.length);i++){
-          const rl=rawArrays[i].map(c=>String(c||"").trim().toLowerCase());
-          if(rl.includes("unit")&&(rl.includes("rent")||rl.includes("actual rent"))) {hdrIdx=i;break;}
-        }
-        if(hdrIdx<0) continue;
-        const hdrs=rawArrays[hdrIdx].map(c=>String(c||"").trim());
-        const propRows=rawArrays.slice(hdrIdx+1).map(arr=>{const o={};hdrs.forEach((h,i)=>{o[h]=arr[i]===undefined?"":arr[i];});return o;});
-        const filtered=propRows.filter(isBuildiumUnitRow).length>0?propRows.filter(isBuildiumUnitRow):propRows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
-        filtered.forEach(r=>{
+        // rr3 is stored as text (CSV/TSV) — use parseDelim, same as main processing
+        const isBd=prop.source==='buildium';
+        const rows=isBd
+          ? parseDelim(skipMetaRows(prop.files.rr3||"")).filter(isBuildiumUnitRow)
+          : parseDelim(prop.files.rr3||"").filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+        rows.forEach(r=>{
           if(!getVacantFlag(r)){
             const rv=parseCur(r["Rent"]||r["Monthly Rent"]||r["Actual Rent"]||r["ActualRent"]||0);
             const rawUnit=String(r["Unit"]||"").trim();
