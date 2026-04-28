@@ -387,10 +387,33 @@ function restoreBackup(){
           showError('Backup contains '+bad.length+' unrecognized or invalid entr'+(bad.length>1?'ies':'y')+' — refusing to restore. First few: '+bad.slice(0,3).join(', '));
           return;
         }
-        dbKeys().forEach(k=>dbRemove(k));
-        entries.forEach(([k,v])=>dbSet(k,v));
-        showToast('✓ Backup restored — '+entries.length+' items loaded');
-        state.showHome=true;render();
+        // Update local cache immediately
+        dbKeys().forEach(k=>{ delete _dbCache[k]; });
+        entries.forEach(([k,v])=>{ _dbCache[k]=v; });
+        // Bulk-write to Supabase in batches of 50, then confirm
+        const toUpsert=entries
+          .filter(([k])=>!_isCacheOnlyKey(k))
+          .map(([k,v])=>({key:k,value:v,updated_at:new Date().toISOString(),...(_currentUser&&_currentUser.id?{updated_by:_currentUser.id}:{})}));
+        const BATCH=50;
+        const batches=[];
+        for(let i=0;i<toUpsert.length;i+=BATCH) batches.push(toUpsert.slice(i,i+BATCH));
+        showToast('Saving to cloud… do not close this tab');
+        Promise.all(batches.map(b=>sb.from(STORE_TABLE).upsert(b)))
+          .then(results=>{
+            const errs=results.filter(r=>r.error);
+            if(errs.length){
+              console.warn('Restore: '+errs.length+' batch(es) failed',errs);
+              showError('Backup loaded into memory but some items may not have synced to cloud. Try again on a stable connection.');
+            } else {
+              showToast('✓ Backup restored — '+entries.length+' items saved to cloud');
+            }
+            state.showHome=true;render();
+          })
+          .catch(err=>{
+            console.warn('Restore bulk upsert failed:',err);
+            showError('Backup loaded into memory but could not sync to cloud: '+(err&&err.message||err));
+            state.showHome=true;render();
+          });
       }catch(e2){showError('Could not read backup file: '+e2.message);}
     };
     r.onerror=()=>showError('Could not read "'+f.name+'". The file may be corrupt or inaccessible.');
