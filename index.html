@@ -3302,7 +3302,35 @@ ${sec.businessPlan && bp.enabled ? `
       ${delta!==null?`<text x="237" y="50" text-anchor="middle" font-family="sans-serif" font-size="10" fill="${delta>=0?'#166534':'#991b1b'}" font-weight="600">${delta>=0?'▲':'▼'} ${delta>=0?'+':''}${deltaPct}%</text>
       <line x1="220" y1="55" x2="155" y2="${95-Math.round((launch/Math.max(launch,cur))*65)}" stroke="${delta>=0?'#16a34a':'#dc2626'}" stroke-width="1" stroke-dasharray="3 2"/>
       <line x1="254" y1="55" x2="320" y2="${95-Math.round((cur/Math.max(launch,cur))*65)}" stroke="${delta>=0?'#16a34a':'#dc2626'}" stroke-width="1" stroke-dasharray="3 2"/>`:''}
-    </svg>`:''}`;
+    </svg>`:''}
+    ${(()=>{
+      if(!launch||!cur||delta===null) return '';
+      const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
+      const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
+      const remodelCount=remodels.length;
+      if(!remodelsTotal||!remodelCount) return '';
+      const monthlyUplift=cur-launch;
+      const annualUplift=Math.round(monthlyUplift*12*remodelCount);
+      const roi=remodelsTotal>0?Math.round(annualUplift/remodelsTotal*100*10)/10:null;
+      return `<div class="sh2" style="margin-top:10px;">Remodel ROI</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;font-family:sans-serif;">
+        <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Monthly Uplift / Unit</div>
+          <div style="font-size:24px;font-weight:700;color:${monthlyUplift>=0?'var(--dark)':'#991b1b'}">${monthlyUplift>=0?'+':''}$${Math.abs(monthlyUplift).toLocaleString()}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">vs. launch target</div>
+        </div>
+        <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Annual Rent Increase</div>
+          <div style="font-size:24px;font-weight:700;color:${annualUplift>=0?'var(--dark)':'#991b1b'}">${annualUplift>=0?'+':''}$${Math.abs(annualUplift).toLocaleString()}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">${remodelCount} remodeled unit${remodelCount!==1?'s':''} × 12 mo.</div>
+        </div>
+        <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
+          <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Remodel ROI</div>
+          <div style="font-size:24px;font-weight:700;color:white">${roi!==null?roi+'%':'—'}</div>
+          <div style="font-size:10px;color:var(--teal);margin-top:4px">annual uplift ÷ remodel spend</div>
+        </div>
+      </div>`;
+    })()}`;
 
   })()}
   ${bp.narrative?`<div class="sh2">Business Plan Narrative</div>
