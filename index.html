@@ -2346,9 +2346,8 @@ function loadAllInvCharts(){
   }; inp.click();
 }
 
-// uploadBpCapex: lets the user import a CapEx / Transaction Detail report from
-// AppFolio (GL format) or Buildium into the Business Plan section.
-// Auto-fills "Amount Spent to Date" and stores parsed line items for the report page.
+// uploadBpCapex: imports a CapEx report (AppFolio GL or Buildium Transaction Detail)
+// into the Business Plan section. Auto-fills Spent to Date and stores parsed data.
 function uploadBpCapex(){
   const inp=document.createElement("input");
   inp.type="file"; inp.accept=".xlsx,.xls,.csv,.tsv,.txt";
@@ -2361,36 +2360,186 @@ function uploadBpCapex(){
       let parsed=null;
       // Try AppFolio GL format first
       try { parsed=parseAFCapexGL(raw, state.currentQuarter||""); } catch(_){}
-      // Fall back to Buildium Transaction Detail format
-      if(!parsed||!parsed.totalCapex){
-        try { parsed=parseCapexDetail(raw); } catch(_){}
-        if(parsed && parsed.totalCapex){
-          // Normalise Buildium output to shared shape
-          parsed={
-            totalCapex: parsed.totalCapex,
-            items: (parsed.themes||[]).map(t=>({name:t.name,amount:t.amount}))
-                   .concat((parsed.sectionTotals||[]).filter(s=>!parsed.themes||!parsed.themes.find(t=>t.name===s.section)).map(s=>({name:s.section,amount:s.amount})))
-                   .sort((a,b)=>b.amount-a.amount)
-          };
-        } else {
-          parsed=null;
-        }
+      if(parsed&&parsed.totalCapex){
+        // Normalise AppFolio result
+        const items=(parsed.capexItems||[]).map(i=>({name:i.name||i.label||"",amount:i.total||i.amount||0})).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
+        parsed={totalCapex:parsed.totalCapex, items, remodels:null, remodelsCount:0};
+      } else {
+        // Try Business Plan-specific Buildium parser
+        parsed=null;
+        try { parsed=parseBpCapexBuildium(raw); } catch(_){}
+        if(!parsed||!parsed.totalCapex) parsed=null;
       }
       if(!parsed||!parsed.totalCapex){
         showError("Could not parse capital expense totals from this file. Supported formats: AppFolio General Ledger or Buildium Transaction Detail by Account.");
         return;
       }
-      // Normalise items array from AppFolio result shape if needed
-      if(!parsed.items && parsed.capexItems){
-        parsed.items=parsed.capexItems.map(i=>({name:i.name||i.label||"",amount:i.total||i.amount||0}));
-      }
       const items=(parsed.items||[]).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
       state.businessPlan.spentToDate=String(Math.round(parsed.totalCapex));
-      state.businessPlan.bpCapexParsed={itemCount:items.length, items};
+      state.businessPlan.bpCapexParsed={
+        itemCount:items.length, items,
+        remodels:parsed.remodels||null,
+        remodelsCount:parsed.remodelsCount||0
+      };
       render();
     };
     if(isXL) r.readAsArrayBuffer(f); else r.readAsText(f);
   }; inp.click();
+}
+
+// parseBpCapexBuildium: Business Plan parser for Buildium "Transaction Detail by Account".
+//
+// A unit is counted as remodeled ONLY when it appears in
+// "Capital Improvements - Labor - General" with a Description containing
+// "Remodel", "Make Ready", or "Make-Ready".
+//
+// For each qualifying unit, total cost = sum of all its positive charges across:
+//   Labor - General, Appliance, Blinds, Carpet, Flooring - Material,
+//   Materials - General, Paint - Material
+//
+// totalCapex = all positive charges across every Capital Improvements section
+// (used to populate the "Spent to Date" field).
+function parseBpCapexBuildium(fileData){
+  if(!fileData) return null;
+  try{
+    let rawRows=[];
+    if(fileData instanceof ArrayBuffer){
+      const wb=XLSX.read(fileData,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      rawRows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+    } else {
+      rawRows=fileData.split(/\r?\n/).map(line=>{
+        const cells=[],re=/("(?:[^"]|"")*"|[^,]*)/g;let m;
+        while((m=re.exec(line))!==null&&m.index<line.length)
+          cells.push(m[1].replace(/^"|"$/g,"").replace(/""/g,'"'));
+        return cells;
+      });
+    }
+    if(!rawRows.length) return null;
+
+    // Find header row
+    let colDate=-1,colName=-1,colDesc=-1,colAmount=-1,colProp=-1,hdr=-1;
+    for(let i=0;i<Math.min(20,rawRows.length);i++){
+      const row=rawRows[i].map(c=>String(c||"").trim().toLowerCase());
+      if(row.includes("description")&&row.includes("name")){
+        hdr=i;
+        colDate  =row.findIndex(c=>c==="date");
+        colName  =row.findIndex(c=>c==="name");
+        colDesc  =row.findIndex(c=>c==="description");
+        colAmount=row.findIndex(c=>c==="amount");
+        colProp  =row.findIndex(c=>c==="property or company"||c==="property");
+        break;
+      }
+    }
+    if(hdr<0) return null;
+
+    const TRIGGER_LC  = "capital improvements - labor - general";
+    const COST_LC = new Set([
+      "capital improvements - labor - general",
+      "capital improvements - appliance",
+      "capital improvements - blinds",
+      "capital improvements - carpet",
+      "capital improvements - flooring - material",
+      "capital improvements - materials - general",
+      "capital improvements - paint - material",
+    ]);
+    const REMODEL_RE = /remodel|make[\s-]ready/i;
+
+    // Extract "Unit XXXX" from Name column
+    function unitNum(name){
+      const m=String(name||"").match(/^[Uu]nit\s+(\d+)\s*(?:-|–|—)/);
+      return m?m[1]:null;
+    }
+
+    // Single pass: collect by section, track all capex total
+    const bySection={}; // sectionLC → [{unit,prop,amount,desc}]
+    let curSection=null,curLC=null,inCap=false,capTotal=0;
+
+    for(let i=hdr+1;i<rawRows.length;i++){
+      const row=rawRows[i]||[];
+      const col0=String(row[0]||"").trim();
+      const col0L=col0.toLowerCase();
+      const dateVal=row[colDate>=0?colDate:0];
+      const isDate=dateVal instanceof Date||typeof dateVal==="number"||/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(String(dateVal));
+      const nameVal=String(row[colName>=0?colName:3]||"").trim();
+      const isSec=col0&&!isDate&&!nameVal;
+
+      if(isSec){
+        if(col0L.startsWith("total for")){curSection=null;curLC=null;inCap=false;}
+        else if(col0L.startsWith("capital improvements")){curSection=col0;curLC=col0L;inCap=true;}
+        else{curSection=null;curLC=null;inCap=false;}
+        continue;
+      }
+      if(!inCap||!curSection) continue;
+
+      const amtRaw=colAmount>=0?row[colAmount]:0;
+      const amt=typeof amtRaw==="number"?amtRaw:parseCur(String(amtRaw||"").replace(/^"|"$/g,""));
+      if(!amt||amt<=0) continue;
+
+      capTotal+=amt;
+      if(COST_LC.has(curLC)){
+        if(!bySection[curLC]) bySection[curLC]=[];
+        bySection[curLC].push({
+          unit:unitNum(nameVal),
+          prop:String(row[colProp>=0?colProp:2]||"").trim(),
+          amount:amt,
+          desc:String(row[colDesc>=0?colDesc:4]||"").replace(/^"|"$/g,"").trim()
+        });
+      }
+    }
+
+    // Identify remodeled units
+    const laborRows=bySection[TRIGGER_LC]||[];
+    const qualified=new Set();
+    laborRows.forEach(r=>{ if(r.unit&&REMODEL_RE.test(r.desc)) qualified.add(r.unit); });
+
+    // Per-unit cost aggregation
+    const FIELD_MAP={
+      "capital improvements - labor - general":       "laborCost",
+      "capital improvements - appliance":             "applianceCost",
+      "capital improvements - blinds":                "blindsCost",
+      "capital improvements - carpet":                "carpetCost",
+      "capital improvements - flooring - material":   "flooringCost",
+      "capital improvements - materials - general":   "materialsCost",
+      "capital improvements - paint - material":      "paintCost",
+    };
+    const unitMap={};
+    qualified.forEach(u=>{
+      unitMap[u]={unit:u,property:"",laborCost:0,applianceCost:0,blindsCost:0,carpetCost:0,flooringCost:0,materialsCost:0,paintCost:0,totalCost:0};
+    });
+    Object.entries(bySection).forEach(([lc,rows])=>{
+      const field=FIELD_MAP[lc]; if(!field) return;
+      rows.forEach(r=>{
+        if(!r.unit||!qualified.has(r.unit)) return;
+        const u=unitMap[r.unit];
+        u[field]+=r.amount; u.totalCost+=r.amount;
+        if(r.prop&&!u.property) u.property=r.prop;
+      });
+    });
+
+    const remodels=Object.values(unitMap)
+      .filter(u=>u.totalCost>0)
+      .sort((a,b)=>parseInt(a.unit)-parseInt(b.unit))
+      .map(u=>({...u,totalCost:Math.round(u.totalCost*100)/100}));
+
+    // Section totals for line-item display
+    const SEC_LABELS={
+      "capital improvements - labor - general":       "Labor — General",
+      "capital improvements - appliance":             "Appliances",
+      "capital improvements - blinds":                "Blinds",
+      "capital improvements - carpet":                "Carpet",
+      "capital improvements - flooring - material":   "Flooring",
+      "capital improvements - materials - general":   "Materials — General",
+      "capital improvements - paint - material":      "Paint",
+    };
+    const items=Object.entries(bySection)
+      .filter(([k])=>SEC_LABELS[k])
+      .map(([k,rows])=>({name:SEC_LABELS[k],amount:Math.round(rows.reduce((s,r)=>s+r.amount,0))}))
+      .filter(i=>i.amount>0)
+      .sort((a,b)=>b.amount-a.amount);
+
+    return{totalCapex:Math.round(capTotal),remodels,remodelsCount:remodels.length,items,itemCount:items.length};
+  }catch(e){console.warn("parseBpCapexBuildium failed:",e);return null;}
 }
 
 // uploadBpLaunchRent: imports one or more rent rolls from the time of purchase
@@ -2907,6 +3056,7 @@ ${sec.businessPlan && bp.enabled ? `
       const pct=budget>0?Math.min(100,Math.round(spent/budget*100)):0;
       const remaining=budget-spent;
       const capexItems=(bp.bpCapexParsed&&bp.bpCapexParsed.items)||[];
+      const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
       return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
         <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
           <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Total Budget</div>
@@ -2925,9 +3075,28 @@ ${sec.businessPlan && bp.enabled ? `
       <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
       </div>`:""}
-      ${capexItems.length>0?`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Top Capital Expenditures</div>
+      ${remodels.length>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline;">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Remodeled Units (${remodels.length})</div>
+        <div style="font-size:10px;color:var(--muted)">Total: $${remodels.reduce((s,u)=>s+u.totalCost,0).toLocaleString()}</div>
+      </div>
+      <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:14px;">
+        <div style="display:grid;grid-template-columns:auto 1fr auto auto auto auto auto auto;gap:0;background:#f0fdf8;padding:5px 10px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">
+          <span>Unit</span><span></span><span style="text-align:right;padding:0 8px">Labor</span><span style="text-align:right;padding:0 8px">Appl.</span><span style="text-align:right;padding:0 8px">Carpet/Floor</span><span style="text-align:right;padding:0 8px">Materials</span><span style="text-align:right;padding:0 8px">Paint</span><span style="text-align:right;padding-left:8px">Total</span>
+        </div>
+        ${remodels.map((u,i)=>`<div style="display:grid;grid-template-columns:auto 1fr auto auto auto auto auto auto;gap:0;padding:6px 10px;background:${i%2===0?'white':'#f9fffe'};font-size:10px;border-top:1px solid #f0f0f0;">
+          <span style="font-weight:700;color:var(--dark)">${escapeHtml(u.unit)}</span>
+          <span></span>
+          <span style="text-align:right;padding:0 8px;color:var(--muted)">${u.laborCost>0?'$'+Math.round(u.laborCost).toLocaleString():''}</span>
+          <span style="text-align:right;padding:0 8px;color:var(--muted)">${u.applianceCost>0?'$'+Math.round(u.applianceCost).toLocaleString():''}</span>
+          <span style="text-align:right;padding:0 8px;color:var(--muted)">${(u.carpetCost+u.flooringCost)>0?'$'+Math.round(u.carpetCost+u.flooringCost).toLocaleString():''}</span>
+          <span style="text-align:right;padding:0 8px;color:var(--muted)">${(u.materialsCost+u.blindsCost)>0?'$'+Math.round(u.materialsCost+u.blindsCost).toLocaleString():''}</span>
+          <span style="text-align:right;padding:0 8px;color:var(--muted)">${u.paintCost>0?'$'+Math.round(u.paintCost).toLocaleString():''}</span>
+          <span style="text-align:right;padding-left:8px;font-weight:700;color:var(--dark)">$${Math.round(u.totalCost).toLocaleString()}</span>
+        </div>`).join('')}
+      </div>`:""}
+      ${capexItems.length>0?`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Capital Spend by Category</div>
       <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
-        ${capexItems.slice(0,8).map((it,i)=>`<div style="display:flex;justify-content:space-between;padding:7px 12px;background:${i%2===0?'white':'#f9fffe'};font-size:11px;">
+        ${capexItems.map((it,i)=>`<div style="display:flex;justify-content:space-between;padding:6px 12px;background:${i%2===0?'white':'#f9fffe'};font-size:11px;">
           <span style="color:var(--dark)">${escapeHtml(it.name)}</span>
           <span style="font-weight:600;color:var(--dark)">$${it.amount.toLocaleString()}</span>
         </div>`).join('')}
@@ -3295,7 +3464,7 @@ function renderInvestmentStep0(){
                 style="flex:1;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
               <button onclick="uploadBpCapex()" title="Import from CapEx report" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
             </div>
-            ${state.businessPlan.bpCapexParsed?`<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ ${state.businessPlan.bpCapexParsed.itemCount} line item${state.businessPlan.bpCapexParsed.itemCount!==1?"s":""} loaded — total auto-filled</div>`:""}
+            ${state.businessPlan.bpCapexParsed?`<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ ${state.businessPlan.bpCapexParsed.remodelsCount>0?state.businessPlan.bpCapexParsed.remodelsCount+' remodeled unit'+(state.businessPlan.bpCapexParsed.remodelsCount!==1?'s':'')+' identified — ':''}total auto-filled</div>`:""}
           </div>
         </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Rent at Launch vs. Today</div>
