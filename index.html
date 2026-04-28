@@ -3577,57 +3577,66 @@ ${sec.businessPlan && bp.enabled ? `
       ${delta!==null?`<text x="237" y="50" text-anchor="middle" font-family="sans-serif" font-size="10" fill="${delta>=0?'#166534':'#991b1b'}" font-weight="600">${delta>=0?'▲':'▼'} ${delta>=0?'+':''}${deltaPct}%</text>
       <line x1="220" y1="55" x2="155" y2="${95-Math.round((launch/Math.max(launch,cur))*65)}" stroke="${delta>=0?'#16a34a':'#dc2626'}" stroke-width="1" stroke-dasharray="3 2"/>
       <line x1="254" y1="55" x2="320" y2="${95-Math.round((cur/Math.max(launch,cur))*65)}" stroke="${delta>=0?'#16a34a':'#dc2626'}" stroke-width="1" stroke-dasharray="3 2"/>`:''}
-    </svg>`:''}
-    ${(()=>{
-      const remodels=(bp.bpCapexParsed&&bp.bpCapexParsed.remodels)||[];
-      const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
-      if(!remodels.length||!remodelsTotal) return '';
-      const launchRents=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
-      const overrides=bp.bpLaunchRentOverrides||{};
-      const currentRents=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
-      // Per-unit ROI: only count units where we have both launch and current rent
-      let totalUplift=0, roiUnits=0;
-      remodels.forEach(u=>{
-        const nk=normUnitKey(u.unit);
-        const launchR=launchRents[nk]||overrides[nk]||0;
-        const curR=currentRents[nk]||0;
-        if(launchR>0&&curR>0){totalUplift+=(curR-launchR);roiUnits++;}
-      });
-      const hasPerUnit=roiUnits>0;
-      // Fallback to portfolio averages if no per-unit data matched.
-      // For averages, only sum units where BOTH launch AND current rent are known
-      // so the numerator and denominator always agree on which units are included.
-      const avgLaunch=hasPerUnit?Math.round(remodels.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=launchRents[nk]||overrides[nk]||0;const cr=currentRents[nk]||0;return(lr>0&&cr>0)?s+lr:s;},0)/roiUnits):launch;
-      const avgCur=hasPerUnit?Math.round(remodels.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=launchRents[nk]||overrides[nk]||0;const cr=currentRents[nk]||0;return(lr>0&&cr>0)?s+cr:s;},0)/roiUnits):cur;
-      const monthlyUplift=hasPerUnit?Math.round(totalUplift/roiUnits):cur-launch;
-      const annualUplift=Math.round(monthlyUplift*12*(hasPerUnit?roiUnits:remodels.length));
-      const roi=remodelsTotal>0?Math.round(annualUplift/remodelsTotal*100*10)/10:null;
-      if(!monthlyUplift&&!annualUplift) return '';
-      return `<div class="sh2" style="margin-top:10px;">Remodel ROI${hasPerUnit?` <span style="font-size:9px;font-weight:400;color:var(--muted)">(${roiUnits} of ${remodels.length} units matched)</span>`:'<span style="font-size:9px;font-weight:400;color:var(--muted)"> (portfolio avg)</span>'}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;font-family:sans-serif;">
-        <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
-          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Avg Monthly Uplift / Unit</div>
-          <div style="font-size:24px;font-weight:700;color:${monthlyUplift>=0?'var(--dark)':'#991b1b'}">${monthlyUplift>=0?'+':''}$${Math.abs(monthlyUplift).toLocaleString()}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:4px">${hasPerUnit?`$${avgLaunch.toLocaleString()} → $${avgCur.toLocaleString()}`:'vs. launch avg'}</div>
-        </div>
-        <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
-          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Annual Rent Increase</div>
-          <div style="font-size:24px;font-weight:700;color:${annualUplift>=0?'var(--dark)':'#991b1b'}">${annualUplift>=0?'+':''}$${Math.abs(annualUplift).toLocaleString()}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:4px">${hasPerUnit?roiUnits:remodels.length} unit${remodels.length!==1?'s':''} × 12 mo.</div>
-        </div>
-        <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
-          <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Remodel ROI</div>
-          <div style="font-size:24px;font-weight:700;color:white">${roi!==null?roi+'%':'—'}</div>
-          <div style="font-size:10px;color:var(--teal);margin-top:4px">annual uplift ÷ remodel spend</div>
-        </div>
-      </div>`;
-    })()}`;
-
+    </svg>`:''}`;
   })()}
-  ${bp.narrative?`<div class="sh2">Business Plan Narrative</div>
-  <div class="ns"><p class="nt">${escapeHtml(bp.narrative).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
-</div>`:""
+</div>
+<!-- PAGE BP3: REMODEL ROI + NARRATIVE -->
+${(()=>{
+  const _bp3=state.businessPlan||{};
+  const _remodels3=(_bp3.bpCapexParsed&&_bp3.bpCapexParsed.remodels)||[];
+  const _remodelsTotal3=Math.round(_remodels3.reduce((s,u)=>s+u.totalCost,0));
+  const _hasRoi3=_remodels3.length>0&&_remodelsTotal3>0;
+  const _hasNarrative3=!!_bp3.narrative;
+  if(!_hasRoi3&&!_hasNarrative3) return '';
+  // Re-derive portfolio averages for ROI fallback
+  const _launch3=parseFloat(String(_bp3.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
+  const _pm3=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+  const _totalRent3=_pm3.reduce((s,p)=>s+(p.monthlyRent||0),0);
+  const _totalOcc3=_pm3.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
+  const _cur3=_totalOcc3>0?Math.round(_totalRent3/_totalOcc3):0;
+  // ROI calculation
+  const _launchRents3=(_bp3.bpLaunchRentParsed&&_bp3.bpLaunchRentParsed.unitRents)||{};
+  const _overrides3=_bp3.bpLaunchRentOverrides||{};
+  const _currentRents3=(_bp3.bpCurrentRentParsed&&_bp3.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+  let _totalUplift3=0, _roiUnits3=0;
+  _remodels3.forEach(u=>{
+    const nk=normUnitKey(u.unit);
+    const launchR=_launchRents3[nk]||_overrides3[nk]||0;
+    const curR=_currentRents3[nk]||0;
+    if(launchR>0&&curR>0){_totalUplift3+=(curR-launchR);_roiUnits3++;}
+  });
+  const _hasPerUnit3=_roiUnits3>0;
+  const _avgLaunch3=_hasPerUnit3?Math.round(_remodels3.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=_launchRents3[nk]||_overrides3[nk]||0;const cr=_currentRents3[nk]||0;return(lr>0&&cr>0)?s+lr:s;},0)/_roiUnits3):_launch3;
+  const _avgCur3=_hasPerUnit3?Math.round(_remodels3.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=_launchRents3[nk]||_overrides3[nk]||0;const cr=_currentRents3[nk]||0;return(lr>0&&cr>0)?s+cr:s;},0)/_roiUnits3):_cur3;
+  const _monthlyUplift3=_hasPerUnit3?Math.round(_totalUplift3/_roiUnits3):_cur3-_launch3;
+  const _annualUplift3=Math.round(_monthlyUplift3*12*(_hasPerUnit3?_roiUnits3:_remodels3.length));
+  const _roi3=_remodelsTotal3>0?Math.round(_annualUplift3/_remodelsTotal3*100*10)/10:null;
+  return `<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
+  ${_hasRoi3&&(_monthlyUplift3||_annualUplift3)?`<div class="sh2">Remodel ROI${_hasPerUnit3?` <span style="font-size:9px;font-weight:400;color:var(--muted)">(${_roiUnits3} of ${_remodels3.length} units matched)</span>`:'<span style="font-size:9px;font-weight:400;color:var(--muted)"> (portfolio avg)</span>'}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px;font-family:sans-serif;">
+    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Avg Monthly Uplift / Unit</div>
+      <div style="font-size:24px;font-weight:700;color:${_monthlyUplift3>=0?'var(--dark)':'#991b1b'}">${_monthlyUplift3>=0?'+':''}$${Math.abs(_monthlyUplift3).toLocaleString()}</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">${_hasPerUnit3?`$${_avgLaunch3.toLocaleString()} → $${_avgCur3.toLocaleString()}`:'vs. launch avg'}</div>
+    </div>
+    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Annual Rent Increase</div>
+      <div style="font-size:24px;font-weight:700;color:${_annualUplift3>=0?'var(--dark)':'#991b1b'}">${_annualUplift3>=0?'+':''}$${Math.abs(_annualUplift3).toLocaleString()}</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">${_hasPerUnit3?_roiUnits3:_remodels3.length} unit${_remodels3.length!==1?'s':''} × 12 mo.</div>
+    </div>
+    <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
+      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Remodel ROI</div>
+      <div style="font-size:24px;font-weight:700;color:white">${_roi3!==null?_roi3+'%':'—'}</div>
+      <div style="font-size:10px;color:var(--teal);margin-top:4px">annual uplift ÷ remodel spend</div>
+    </div>
+  </div>`:''}
+  ${_hasNarrative3?`<div class="sh2">Business Plan Narrative</div>
+  <div class="ns"><p class="nt">${escapeHtml(_bp3.narrative).replace(/\n/g,'<br>')}</p></div>`:""}
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`;
+})()}`:""
 }
 ${sec.financialCharts?`
 <!-- PAGE 4: FINANCIAL CHARTS (4-up) -->
