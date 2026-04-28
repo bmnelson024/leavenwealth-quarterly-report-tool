@@ -441,7 +441,7 @@ function _makeDefaultState(){
     invPrevMetrics: null,
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
-    businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRate:"", locLender:"", unitsCompleted:"", unitsRemaining:"", estimatedCompletion:"", totalBudget:"", spentToDate:"", narrative:"" },
+    businessPlan: { enabled:false, locLimit:"", locDrawn:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
     bgChampionCustom: { commentary:"", charts:[] }
@@ -633,7 +633,7 @@ function saveProgress(options){
     invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
-    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''},
+    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
     savedAt:new Date().toISOString()
@@ -807,7 +807,7 @@ function loadSave(key){
       invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
-      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''},
+      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null},
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       invReportHTML:null,
@@ -1031,7 +1031,7 @@ function selectSource(src){
   state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
   state.invNarrativesEdited = false;
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
-  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRate:'',locLender:'',unitsCompleted:'',unitsRemaining:'',estimatedCompletion:'',totalBudget:'',spentToDate:'',narrative:''};
+  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null};
   render();
 }
 function renderHome(){
@@ -2345,6 +2345,54 @@ function loadAllInvCharts(){
     }
   }; inp.click();
 }
+
+// uploadBpCapex: lets the user import a CapEx / Transaction Detail report from
+// AppFolio (GL format) or Buildium into the Business Plan section.
+// Auto-fills "Amount Spent to Date" and stores parsed line items for the report page.
+function uploadBpCapex(){
+  const inp=document.createElement("input");
+  inp.type="file"; inp.accept=".xlsx,.xls,.csv,.tsv,.txt";
+  inp.onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const isXL=/\.(xlsx|xls)$/i.test(f.name);
+    const r=new FileReader();
+    r.onload=ev=>{
+      const raw=ev.target.result;
+      let parsed=null;
+      // Try AppFolio GL format first
+      try { parsed=parseAFCapexGL(raw, state.currentQuarter||""); } catch(_){}
+      // Fall back to Buildium Transaction Detail format
+      if(!parsed||!parsed.totalCapex){
+        try { parsed=parseCapexDetail(raw); } catch(_){}
+        if(parsed && parsed.totalCapex){
+          // Normalise Buildium output to shared shape
+          parsed={
+            totalCapex: parsed.totalCapex,
+            items: (parsed.themes||[]).map(t=>({name:t.name,amount:t.amount}))
+                   .concat((parsed.sectionTotals||[]).filter(s=>!parsed.themes||!parsed.themes.find(t=>t.name===s.section)).map(s=>({name:s.section,amount:s.amount})))
+                   .sort((a,b)=>b.amount-a.amount)
+          };
+        } else {
+          parsed=null;
+        }
+      }
+      if(!parsed||!parsed.totalCapex){
+        showError("Could not parse capital expense totals from this file. Supported formats: AppFolio General Ledger or Buildium Transaction Detail by Account.");
+        return;
+      }
+      // Normalise items array from AppFolio result shape if needed
+      if(!parsed.items && parsed.capexItems){
+        parsed.items=parsed.capexItems.map(i=>({name:i.name||i.label||"",amount:i.total||i.amount||0}));
+      }
+      const items=(parsed.items||[]).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
+      state.businessPlan.spentToDate=String(Math.round(parsed.totalCapex));
+      state.businessPlan.bpCapexParsed={itemCount:items.length, items};
+      render();
+    };
+    if(isXL) r.readAsArrayBuffer(f); else r.readAsText(f);
+  }; inp.click();
+}
+
 function parsePropertyMetrics(prop){
   // Income statement is optional per property — aligns with single-property
   // mode. If missing, all financial fields stay at zero and the property
@@ -2749,39 +2797,37 @@ ${sec.businessPlan && bp.enabled ? `
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
   <div class="sh2">Line of Credit</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px;font-family:sans-serif;">
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Lender</div>
-      <div style="font-size:16px;font-weight:700;color:var(--dark)">${escapeHtml(bp.locLender||"—")}</div>
-    </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;font-family:sans-serif;">
     <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
       <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">LOC Limit</div>
-      <div style="font-size:16px;font-weight:700;color:var(--dark)">${bp.locLimit?'$'+Number(String(bp.locLimit).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
+      <div style="font-size:22px;font-weight:700;color:var(--dark)">${bp.locLimit?'$'+Number(String(bp.locLimit).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
     </div>
     <div style="background:var(--dark);border-radius:8px;padding:14px 16px;">
       <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Amount Drawn</div>
-      <div style="font-size:16px;font-weight:700;color:white">${bp.locDrawn?'$'+Number(String(bp.locDrawn).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
-    </div>
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Interest Rate</div>
-      <div style="font-size:16px;font-weight:700;color:var(--dark)">${bp.locRate?bp.locRate+'%':"—"}</div>
+      <div style="font-size:22px;font-weight:700;color:white">${bp.locDrawn?'$'+Number(String(bp.locDrawn).replace(/[$,]/g,'')).toLocaleString():"—"}</div>
     </div>
   </div>
   <div class="sh2">Remodel Progress</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px;font-family:sans-serif;">
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Completed</div>
-      <div style="font-size:28px;font-weight:700;color:var(--dark)">${escapeHtml(bp.unitsCompleted||"—")}</div>
+  ${(()=>{
+    const comp=parseInt(bp.unitsCompleted)||0;
+    const rem=parseInt(bp.unitsRemaining)||0;
+    const total=comp+rem;
+    const pct=total>0?Math.min(100,Math.round(comp/total*100)):0;
+    return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;font-family:sans-serif;">
+      <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
+        <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Completed</div>
+        <div style="font-size:34px;font-weight:700;color:white">${comp||"—"}</div>
+      </div>
+      <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+        <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Remaining</div>
+        <div style="font-size:34px;font-weight:700;color:var(--dark)">${rem||"—"}</div>
+      </div>
     </div>
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Remaining</div>
-      <div style="font-size:28px;font-weight:700;color:var(--dark)">${escapeHtml(bp.unitsRemaining||"—")}</div>
-    </div>
-    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Est. Completion</div>
-      <div style="font-size:18px;font-weight:700;color:var(--dark)">${escapeHtml(bp.estimatedCompletion||"—")}</div>
-    </div>
-  </div>
+    ${total>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Remodel completion</span><span>${pct}% (${comp} of ${total} units)</span></div>
+    <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:20px;">
+      <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
+    </div>`:'<div style="margin-bottom:20px"></div>'}`;
+  })()}
   <div class="sh2">Budget vs. Actual</div>
   <div style="margin-bottom:20px;font-family:sans-serif;">
     ${(()=>{
@@ -2789,6 +2835,7 @@ ${sec.businessPlan && bp.enabled ? `
       const spent=parseFloat(String(bp.spentToDate||"0").replace(/[$,]/g,""))||0;
       const pct=budget>0?Math.min(100,Math.round(spent/budget*100)):0;
       const remaining=budget-spent;
+      const capexItems=(bp.bpCapexParsed&&bp.bpCapexParsed.items)||[];
       return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
         <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
           <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Total Budget</div>
@@ -2804,13 +2851,48 @@ ${sec.businessPlan && bp.enabled ? `
         </div>
       </div>
       ${budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Budget utilization</span><span>${pct}%</span></div>
-      <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;">
+      <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
+      </div>`:""}
+      ${capexItems.length>0?`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Top Capital Expenditures</div>
+      <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+        ${capexItems.slice(0,8).map((it,i)=>`<div style="display:flex;justify-content:space-between;padding:7px 12px;background:${i%2===0?'white':'#f9fffe'};font-size:11px;">
+          <span style="color:var(--dark)">${escapeHtml(it.name)}</span>
+          <span style="font-weight:600;color:var(--dark)">$${it.amount.toLocaleString()}</span>
+        </div>`).join('')}
       </div>`:""}`;
     })()}
   </div>
+  ${(()=>{
+    const launch=parseFloat(String(bp.launchRentPerUnit||"0").replace(/[$,]/g,""))||0;
+    const pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+    const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
+    const totalOcc=pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
+    const cur=totalOcc>0?Math.round(totalRent/totalOcc):0;
+    if(!launch&&!cur) return '';
+    const delta=launch&&cur?cur-launch:null;
+    const deltaPct=launch&&cur?Math.round((cur-launch)/launch*100):null;
+    return `<div class="sh2">Rent at Launch vs. Today</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr${delta!==null?' 1fr':''};gap:12px;margin-bottom:20px;font-family:sans-serif;">
+      ${launch?`<div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+        <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Rent at Launch</div>
+        <div style="font-size:28px;font-weight:700;color:var(--dark)">$${launch.toLocaleString()}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px">per occupied unit</div>
+      </div>`:''}
+      ${cur?`<div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
+        <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Current Rent</div>
+        <div style="font-size:28px;font-weight:700;color:white">$${cur.toLocaleString()}</div>
+        <div style="font-size:10px;color:var(--teal);margin-top:4px">per occupied unit</div>
+      </div>`:''}
+      ${delta!==null?`<div style="background:${delta>=0?'#dcfce7':'#fee2e2'};border-radius:8px;padding:14px 16px;text-align:center;">
+        <div style="font-size:9px;color:${delta>=0?'#166534':'#991b1b'};text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Change</div>
+        <div style="font-size:28px;font-weight:700;color:${delta>=0?'#166534':'#991b1b'}">${delta>=0?'+':''}${deltaPct}%</div>
+        <div style="font-size:10px;color:${delta>=0?'#166534':'#991b1b'};margin-top:4px">${delta>=0?'+':''}$${Math.abs(delta).toLocaleString()} / unit</div>
+      </div>`:''}
+    </div>`;
+  })()}
   ${bp.narrative?`<div class="sh2">Business Plan Narrative</div>
-  <div class="ns"><p class="nt">${escapeHtml(bp.narrative)}</p></div>`:""}
+  <div class="ns"><p class="nt">${escapeHtml(bp.narrative).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:""
 }
@@ -3103,11 +3185,7 @@ function renderInvestmentStep0(){
       ${state.businessPlan.enabled?`
       <div style="margin-top:14px;border-top:1px solid #c8e6de;padding-top:14px">
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Line of Credit</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Lender</label>
-            <input type="text" placeholder="e.g. First Bank" value="${escapeHtml(state.businessPlan.locLender)}"
-              oninput="state.businessPlan.locLender=this.value"
-              style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">LOC Limit</label>
             <input type="text" placeholder="e.g. 2,500,000" value="${escapeHtml(state.businessPlan.locLimit)}"
               oninput="state.businessPlan.locLimit=this.value"
@@ -3116,16 +3194,9 @@ function renderInvestmentStep0(){
             <input type="text" placeholder="e.g. 1,200,000" value="${escapeHtml(state.businessPlan.locDrawn)}"
               oninput="state.businessPlan.locDrawn=this.value"
               style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Interest Rate (%)</label>
-            <div style="display:flex;align-items:center;border:1px solid #c8e6de;border-radius:6px;background:white;overflow:hidden">
-              <input type="number" min="0" max="30" step="0.01" placeholder="7.5" value="${state.businessPlan.locRate}"
-                oninput="state.businessPlan.locRate=this.value"
-                style="flex:1;padding:7px 8px;border:none;outline:none;font-size:13px;font-family:Inter,sans-serif"/>
-              <span style="padding:7px 8px;background:#e6f9f4;color:#5a8070;font-size:12px;font-weight:600">%</span>
-            </div></div>
         </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Completed</label>
             <input type="number" min="0" placeholder="e.g. 24" value="${state.businessPlan.unitsCompleted}"
               oninput="state.businessPlan.unitsCompleted=this.value"
@@ -3134,10 +3205,6 @@ function renderInvestmentStep0(){
             <input type="number" min="0" placeholder="e.g. 12" value="${state.businessPlan.unitsRemaining}"
               oninput="state.businessPlan.unitsRemaining=this.value"
               style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Est. Completion</label>
-            <input type="text" placeholder="e.g. Q3 2026" value="${escapeHtml(state.businessPlan.estimatedCompletion)}"
-              oninput="state.businessPlan.estimatedCompletion=this.value"
-              style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
         </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Budget vs. Actual</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
@@ -3145,10 +3212,40 @@ function renderInvestmentStep0(){
             <input type="text" placeholder="e.g. 1,800,000" value="${escapeHtml(state.businessPlan.totalBudget)}"
               oninput="state.businessPlan.totalBudget=this.value"
               style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-          <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Amount Spent to Date</label>
-            <input type="text" placeholder="e.g. 960,000" value="${escapeHtml(state.businessPlan.spentToDate)}"
-              oninput="state.businessPlan.spentToDate=this.value"
-              style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Amount Spent to Date</label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="text" placeholder="e.g. 960,000" value="${escapeHtml(state.businessPlan.spentToDate)}"
+                oninput="state.businessPlan.spentToDate=this.value"
+                style="flex:1;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
+              <button onclick="uploadBpCapex()" title="Import from CapEx report" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
+            </div>
+            ${state.businessPlan.bpCapexParsed?`<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ ${state.businessPlan.bpCapexParsed.itemCount} line item${state.businessPlan.bpCapexParsed.itemCount!==1?"s":""} loaded — total auto-filled</div>`:""}
+          </div>
+        </div>
+        <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Rent at Launch vs. Today</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Rent / Unit at Project Launch</label>
+            <div style="display:flex;align-items:center;border:1px solid #c8e6de;border-radius:6px;background:white;overflow:hidden">
+              <span style="padding:7px 8px;background:#e6f9f4;color:#5a8070;font-size:12px;font-weight:600">$</span>
+              <input type="text" placeholder="e.g. 750" value="${escapeHtml(state.businessPlan.launchRentPerUnit)}"
+                oninput="state.businessPlan.launchRentPerUnit=this.value"
+                style="flex:1;padding:7px 8px;border:none;outline:none;font-size:13px;font-family:Inter,sans-serif"/>
+            </div>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Current Rent / Occupied Unit</label>
+            ${(()=>{
+              const pm=(state.invMetrics&&state.invMetrics.propertyMetrics)||[];
+              const totalRent=pm.reduce((s,p)=>s+(p.monthlyRent||0),0);
+              const totalOcc=pm.reduce((s,p)=>s+Math.round((p.unitCount||0)*(p.occupancy||0)/100),0);
+              const cur=totalOcc>0?Math.round(totalRent/totalOcc):0;
+              return cur>0
+                ? `<div style="padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;background:#f0fdf8;font-size:13px;color:#1a3a35;font-weight:600">$${cur.toLocaleString()} <span style="font-size:10px;font-weight:400;color:#5a8070">(from rent roll)</span></div>`
+                : `<div style="padding:8px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:12px;color:#9ca3af;font-style:italic">Upload rent rolls to auto-calculate</div>`;
+            })()}
+          </div>
         </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Business Plan Narrative</div>
         <textarea placeholder="Describe the current phase of the business plan, key milestones achieved, and what's ahead..." rows="4"
