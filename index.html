@@ -1869,7 +1869,16 @@ async function rewriteWithClaude(kind){
     }
     showToast("✨ Narratives rewritten with Claude");
   } catch(e){
-    const msg = (e && (e.message || e.error || e.toString())) || "unknown error";
+    let msg = (e && (e.message || e.error || e.toString())) || "unknown error";
+    // Supabase FunctionsHttpError carries the raw Response on .context — read it
+    // so we get the actual JSON error body instead of the generic non-2xx string.
+    if (e && e.context && typeof e.context.text === 'function') {
+      try {
+        const body = await e.context.text();
+        const parsed = JSON.parse(body);
+        if (parsed && parsed.error) msg = parsed.error;
+      } catch(_) { /* ignore parse failures — keep original message */ }
+    }
     showError("Claude rewrite failed: " + msg + ". Existing narratives left unchanged.");
   } finally {
     state.rewritingClaude = false;
