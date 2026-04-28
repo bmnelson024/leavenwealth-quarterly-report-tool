@@ -3051,20 +3051,35 @@ ${sec.businessPlan && bp.enabled ? `
     const rem=parseInt(bp.unitsRemaining)||0;
     const total=comp+rem;
     const pct=total>0?Math.min(100,Math.round(comp/total*100)):0;
-    return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;font-family:sans-serif;">
-      <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
-        <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Completed</div>
-        <div style="font-size:34px;font-weight:700;color:white">${comp||"—"}</div>
+    const r=58,circ=+(2*Math.PI*r).toFixed(2);
+    const arc=total>0?+((pct/100)*circ).toFixed(2):0;
+    const donut=total>0?`<svg viewBox="0 0 150 150" width="150" height="150" style="flex-shrink:0;display:block">
+      <circle cx="75" cy="75" r="${r}" fill="none" stroke="#e5e7eb" stroke-width="14"/>
+      <circle cx="75" cy="75" r="${r}" fill="none" stroke="#00c48c" stroke-width="14"
+        stroke-dasharray="${arc} ${circ}" stroke-linecap="round"
+        transform="rotate(-90 75 75)"/>
+      <text x="75" y="70" text-anchor="middle" font-family="sans-serif" font-size="28" font-weight="700" fill="#1a3a35">${pct}%</text>
+      <text x="75" y="91" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5a8070">${comp} of ${total} units</text>
+    </svg>`:'';
+    return `<div style="display:flex;gap:24px;align-items:center;margin-bottom:20px;font-family:sans-serif;">
+      <div style="flex:1">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
+            <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Completed</div>
+            <div style="font-size:34px;font-weight:700;color:white">${comp||"—"}</div>
+          </div>
+          <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+            <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Remaining</div>
+            <div style="font-size:34px;font-weight:700;color:var(--dark)">${rem||"—"}</div>
+          </div>
+        </div>
+        ${total>0?`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px"><span>Remodel completion</span><span>${pct}% (${comp} of ${total} units)</span></div>
+        <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+          <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:4px;"></div>
+        </div>`:''}
       </div>
-      <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
-        <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Remaining</div>
-        <div style="font-size:34px;font-weight:700;color:var(--dark)">${rem||"—"}</div>
-      </div>
-    </div>
-    ${total>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Remodel completion</span><span>${pct}% (${comp} of ${total} units)</span></div>
-    <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:20px;">
-      <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
-    </div>`:'<div style="margin-bottom:20px"></div>'}`;
+      ${donut}
+    </div>`;
   })()}
   <div class="sh2">Budget vs. Actual</div>
   <div style="margin-bottom:20px;font-family:sans-serif;">
@@ -3147,7 +3162,20 @@ ${sec.businessPlan && bp.enabled ? `
         <div style="font-size:28px;font-weight:700;color:${delta>=0?'#166534':'#991b1b'}">${delta>=0?'+':''}${deltaPct}%</div>
         <div style="font-size:10px;color:${delta>=0?'#166534':'#991b1b'};margin-top:4px">${delta>=0?'+':''}$${Math.abs(delta).toLocaleString()} / unit</div>
       </div>`:''}
-    </div>`;
+    </div>
+    ${launch&&cur?`<svg viewBox="0 0 540 130" width="540" height="130" style="display:block;margin:14px auto 4px">
+      <line x1="60" y1="95" x2="480" y2="95" stroke="#e5e7eb" stroke-width="1.5"/>
+      <rect x="90" y="${95-Math.round((launch/Math.max(launch,cur))*65)}" width="130" height="${Math.round((launch/Math.max(launch,cur))*65)}" fill="#e6f9f4" stroke="#00c48c" stroke-width="1.5" rx="4"/>
+      <text x="155" y="${95-Math.round((launch/Math.max(launch,cur))*65)-8}" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="700" fill="#1a3a35">$${launch.toLocaleString()}</text>
+      <text x="155" y="113" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#5a8070">Rent at Launch</text>
+      <rect x="320" y="${95-Math.round((cur/Math.max(launch,cur))*65)}" width="130" height="${Math.round((cur/Math.max(launch,cur))*65)}" fill="#1a3a35" rx="4"/>
+      <text x="385" y="${95-Math.round((cur/Math.max(launch,cur))*65)-8}" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="700" fill="#1a3a35">$${cur.toLocaleString()}</text>
+      <text x="385" y="113" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#5a8070">Current Rent</text>
+      ${delta!==null?`<text x="237" y="50" text-anchor="middle" font-family="sans-serif" font-size="10" fill="${delta>=0?'#166534':'#991b1b'}" font-weight="600">${delta>=0?'▲':'▼'} ${delta>=0?'+':''}${deltaPct}%</text>
+      <line x1="220" y1="55" x2="155" y2="${95-Math.round((launch/Math.max(launch,cur))*65)}" stroke="${delta>=0?'#16a34a':'#dc2626'}" stroke-width="1" stroke-dasharray="3 2"/>
+      <line x1="254" y1="55" x2="320" y2="${95-Math.round((cur/Math.max(launch,cur))*65)}" stroke="${delta>=0?'#16a34a':'#dc2626'}" stroke-width="1" stroke-dasharray="3 2"/>`:''}
+    </svg>`:''}`;
+
   })()}
   ${bp.narrative?`<div class="sh2">Business Plan Narrative</div>
   <div class="ns"><p class="nt">${escapeHtml(bp.narrative).replace(/\n/g,'<br>')}</p></div>`:""}
