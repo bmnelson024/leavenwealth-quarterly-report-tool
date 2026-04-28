@@ -1420,6 +1420,7 @@ const isBuildiumUnitRow = r => {
   if(/^->/.test(id)) return false;
   if(/^\d+\s*(bed|bath|br|ba)\b/i.test(id)) return false;     // "1 Bed/1 Bath"
   if(/^\d+\s*bed\/?\s*\d+\s*bath/i.test(id)) return false;    // "2 Bed/1 Bath" compact form
+  if(/\bowned\b/i.test(id)) return false;                     // "1820 owned" — tenant-owned unit, not a rental
   if(id.length >= 50) return false;
   // Exclude property-group header rows: Buildium rent rolls that cover multiple
   // properties show a label row with the property name in the Unit column but
