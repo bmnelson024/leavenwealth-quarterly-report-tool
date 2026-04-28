@@ -1695,22 +1695,71 @@ const genNarratives = m => {
 // as a server-side secret and asks Claude Sonnet 4.6 to rewrite the narrative
 // paragraphs from the same metrics the template uses. On failure, leaves the
 // existing narratives (template-generated or user-edited) untouched.
-// After Claude rewrites investment narratives, substitute any "N-unit property"
-// references with the actual property name so generic descriptions don't appear.
+// After Claude rewrites investment narratives, substitute all generic property
+// references with actual property names. Catches every pattern Claude commonly
+// generates when it ignores the property names in the prompt.
 function fixInvPropertyNameRefs(text, propertyMetrics){
   if(!text || !propertyMetrics) return text;
   let result = text;
-  for(const p of propertyMetrics){
-    if(!p.name || !p.unitCount) continue;
+  const props = propertyMetrics.filter(p => p.name && p.unitCount);
+  const nouns = 'propert(?:y|ies)|asset(?:s)?|building(?:s)?|communit(?:y|ies)|development(?:s)?|project(?:s)?|complex(?:es)?';
+
+  // 1. "N-unit property/asset/etc." — exact unit count match
+  for(const p of props){
     const n = p.unitCount;
-    // Match: "the 70-unit property/asset/building/community/development/project/portfolio/complex"
-    const nouns = 'propert(?:y|ies)|asset|building|community|development|project|complex|portfolio';
     const pat = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\s+(?:${nouns})\\b`, 'gi');
     result = result.replace(pat, p.name);
-    // Also catch bare "the [N]-unit" references at end of sentence or before punctuation
-    const pat2 = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\b(?!\\s+(?:${nouns}))`, 'gi');
+    // Bare "the N-unit" before punctuation or end
+    const pat2 = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\b(?!\\s*-?\\s*(?:${nouns}))`, 'gi');
     result = result.replace(pat2, p.name);
   }
+
+  // 2. Two-property portfolio: replace collective and comparative references
+  if(props.length === 2){
+    const [a, b] = props;
+    const andNames = `${a.name} and ${b.name}`;
+    const larger  = a.unitCount >= b.unitCount ? a : b;
+    const smaller = a.unitCount <  b.unitCount ? a : b;
+    const higher  = (a.occupancy||0) >= (b.occupancy||0) ? a : b;
+    const lower   = (a.occupancy||0) <  (b.occupancy||0) ? a : b;
+
+    // "both properties" / "both assets" / "the two properties"
+    result = result.replace(/\bboth\s+(?:propert(?:y|ies)|assets?|buildings?|communities|developments?|complexes?)\b/gi, andNames);
+    result = result.replace(/\bthe\s+two\s+(?:propert(?:y|ies)|assets?|buildings?|communities|developments?|complexes?)\b/gi, andNames);
+    result = result.replace(/\beach\s+(?:of\s+the\s+two\s+)?(?:propert(?:y|ies)|assets?|buildings?)\b/gi, `both ${andNames}`);
+    result = result.replace(/\bacross\s+both\b/gi, `across ${andNames}`);
+    result = result.replace(/\bat\s+both\s+(?:propert(?:y|ies)|assets?|locations?|sites?|communities)\b/gi, `at ${andNames}`);
+
+    // "the larger / smaller property"
+    result = result.replace(/\bthe\s+larger\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, larger.name);
+    result = result.replace(/\bthe\s+smaller\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, smaller.name);
+    result = result.replace(/\bthe\s+larger\s+of\s+the\s+two\b/gi, larger.name);
+    result = result.replace(/\bthe\s+smaller\s+of\s+the\s+two\b/gi, smaller.name);
+
+    // "the higher-occupancy / lower-occupancy property"
+    result = result.replace(/\bthe\s+higher[- ]occupancy\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, higher.name);
+    result = result.replace(/\bthe\s+lower[- ]occupancy\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, lower.name);
+
+    // "Property 1" / "Property 2" / "the first property" / "the second property"
+    result = result.replace(/\bproperty\s+1\b/gi, a.name);
+    result = result.replace(/\bproperty\s+2\b/gi, b.name);
+    result = result.replace(/\bthe\s+first\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, a.name);
+    result = result.replace(/\bthe\s+second\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, b.name);
+    result = result.replace(/\bthe\s+other\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, b.name);
+  }
+
+  // 3. Three-or-more property portfolio
+  if(props.length >= 3){
+    const allNames = props.map(p=>p.name).slice(0,-1).join(', ') + ', and ' + props[props.length-1].name;
+    const wordNums = ['','one','two','three','four','five','six','seven','eight','nine','ten'];
+    const w = wordNums[props.length] || String(props.length);
+    result = result.replace(new RegExp(`\\ball\\s+(?:${w}|${props.length})\\s+(?:${nouns})\\b`,'gi'), allNames);
+    result = result.replace(new RegExp(`\\bthe\\s+(?:${w}|${props.length})\\s+(?:${nouns})\\b`,'gi'), allNames);
+    for(let i=0;i<props.length;i++){
+      result = result.replace(new RegExp(`\\bproperty\\s+${i+1}\\b`,'gi'), props[i].name);
+    }
+  }
+
   return result;
 }
 async function rewriteWithClaude(kind){
@@ -1726,6 +1775,7 @@ async function rewriteWithClaude(kind){
           quarter: state.currentQuarter || "",
           prevLabel: calcPrevQuarterLabel(state.currentQuarter||"") || "Prior Quarter",
           propertyNames: (metrics.propertyMetrics||[]).map(p=>p.name).filter(Boolean),
+          propertyNameInstruction: `CRITICAL: You MUST refer to each property by its exact name at all times. The property names are: ${(metrics.propertyMetrics||[]).filter(p=>p.name).map(p=>`"${p.name}" (${p.unitCount} units)`).join(', ')}. NEVER use generic references such as "the N-unit property", "both properties", "the two properties", "the larger property", "the smaller property", "the first property", "Property 1", or any other substitute. Always use the actual property name.`,
           metrics: {
             totalIncome: metrics.totalIncome, totalExpense: metrics.totalExpense, noi: metrics.noi,
             occupancy: metrics.occupancy, avgEconOcc: metrics.avgEconOcc,
