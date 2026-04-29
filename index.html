@@ -1808,7 +1808,7 @@ async function rewriteWithClaude(kind){
   // Pre-compute direction + % change so Claude never has to do arithmetic itself.
   // "direction" is the authoritative up/down label; "pctChange" is already absolute.
   const _chg = (cur, prior) => {
-    if(prior == null || Math.abs(prior) < 0.01) return null;
+    if(cur == null || prior == null || Math.abs(prior) < 0.01) return null;
     const pct = (cur - prior) / Math.abs(prior) * 100;
     return { current: cur, prior, direction: pct >= 0 ? "increased" : "decreased", pctChange: Math.abs(pct).toFixed(1) };
   };
@@ -1867,7 +1867,7 @@ async function rewriteWithClaude(kind){
             lossToLease: metrics.lossToLease, delinquency: metrics.delinquency,
             newLeases: metrics.newLeases, renewals: metrics.renewals,
             inquiries: metrics.inquiries, applications: metrics.applications,
-            capex: metrics.capex, cashOnHand: metrics.cashOnHand,
+            capex: metrics.capex||0, cashOnHand: metrics.cashOnHand||0,
             capexItems: (metrics.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount})),
             expenseCategories: (metrics.expenseCategories||[]).map(c=>({name:c.name,amount:c.amount})),
             // capexDetail: project-level context filtered to current quarter only.
@@ -1903,6 +1903,8 @@ async function rewriteWithClaude(kind){
           precomputedChanges: (() => {
             const p = state.prevMetrics;
             if(!p) return null;
+            // NOTE: single-property prevMetrics uses .income/.expenses (not .totalIncome/.totalExpense)
+            // unlike invPrevMetrics — do not "normalise" these field names without updating both sides.
             return {
               income:    _chg(metrics.totalIncome,  p.income),
               expenses:  _chg(metrics.totalExpense, p.expenses),
@@ -4753,87 +4755,6 @@ function loadAllCharts(){
       const msgs=[];
       if(unmatched.length>0) msgs.push("Could not match "+unmatched.length+" file(s): "+unmatched.join(", ")+". Check filenames and try uploading manually.");
       if(failed.length>0) msgs.push("Failed to read "+failed.length+" file(s): "+failed.join(", ")+". The file may be corrupt or inaccessible.");
-      showError(msgs.join(" "));
-    }
-  };
-  inp.click();
-}
-function loadAllRentRolls(){
-  const inp=document.createElement("input"); inp.type="file"; inp.accept=".xlsx,.xls,.csv,.tsv,.txt"; inp.multiple=true;
-  inp.onchange=e=>{
-    const files=Array.from(e.target.files); if(!files.length) return;
-    const months=getQMonths(state.currentQuarter||"");
-    // Month number lookup for numeric filename matching (e.g. "01", "02", "03")
-    const MONTH_NUMS={january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",july:"07",august:"08",september:"09",october:"10",november:"11",december:"12"};
-    const slots=months.map((month,i)=>({
-      key:["rr1","rr2","rr3"][i],
-      full:month.toLowerCase(),
-      abbr:month.toLowerCase().slice(0,3),
-      num:MONTH_NUMS[month.toLowerCase()]||String(i+1).padStart(2,"0")
-    }));
-    // Try to match each file to a slot by month name/abbreviation/number in filename.
-    // Normalise underscores→spaces so "rent_roll-20260401" still works with month tokens.
-    const normRR=s=>s.replace(/_/g," ").toLowerCase();
-    const assigned={rr1:null,rr2:null,rr3:null};
-    const unmatched=[];
-    files.forEach(f=>{
-      const name=normRR(f.name.replace(/\.[^.]+$/,""));
-      const slot=slots.find(s=>
-        name.includes(s.full)||
-        name.includes(s.abbr)||
-        name.includes("-"+s.num)||name.includes("_"+s.num)||name.includes(" "+s.num)
-      );
-      // If two files match the same slot, the loser falls through to unmatched so
-      // the dedup fallback can still place it into an empty slot (or report it).
-      if(slot&&!assigned[slot.key]) assigned[slot.key]=f;
-      else unmatched.push(f);
-    });
-    // Fallback: when all rent rolls share the same base name (AppFolio same-day downloads),
-    // sort by duplicate suffix — base file (no suffix) = Month 1, (1) = Month 2, (2) = Month 3.
-    const unfilledSlots=["rr1","rr2","rr3"].filter(k=>!assigned[k]);
-    unmatched.sort((a,b)=>rrSuffix(a.name)-rrSuffix(b.name));
-    const leftover=[];
-    unmatched.forEach((f,i)=>{
-      if(i<unfilledSlots.length) assigned[unfilledSlots[i]]=f;
-      else leftover.push(f.name);
-    });
-    // Read matched files
-    const toRead=Object.entries(assigned).filter(([,v])=>v);
-    if(!toRead.length){showError("No rent roll files could be matched. Try uploading individually.");return;}
-    let pending=toRead.length;
-    const failed=[];
-    toRead.forEach(([key,file])=>{
-      const isXL=["xlsx","xls"].includes(file.name.split(".").pop().toLowerCase());
-      const finish=text=>{
-        state.files[key]=text;
-        tryAutoFillPropertyName(text);
-        pending--;
-        if(pending===0) done();
-      };
-      const fail=()=>{
-        failed.push(file.name);
-        pending--;
-        if(pending===0) done();
-      };
-      if(isXL){
-        const r=new FileReader();
-        r.onload=ev=>finish(xlsxToText(ev.target.result));
-        r.onerror=fail;
-        r.readAsArrayBuffer(file);
-      } else {
-        const r=new FileReader();
-        r.onload=ev=>finish(ev.target.result);
-        r.onerror=fail;
-        r.readAsText(file);
-      }
-    });
-    function done(){
-      render();
-      const msgs=[];
-      const stillMissing=["rr1","rr2","rr3"].filter(k=>!state.files[k]);
-      if(stillMissing.length>0) msgs.push("Matched "+(3-stillMissing.length)+" of 3 rent rolls — could not auto-assign the remaining "+stillMissing.length+". Try uploading those individually.");
-      if(leftover.length>0) msgs.push("Extra file(s) not placed: "+leftover.join(", ")+".");
-      if(failed.length>0) msgs.push("Failed to read: "+failed.join(", ")+".");
       showError(msgs.join(" "));
     }
   };
