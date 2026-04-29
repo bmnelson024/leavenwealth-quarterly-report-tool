@@ -1805,6 +1805,13 @@ async function rewriteWithClaude(kind){
   const metrics = isInv ? state.invMetrics : state.metrics;
   if(!metrics){ showError("No metrics available — process the report first."); return; }
   state.rewritingClaude = true; render();
+  // Pre-compute direction + % change so Claude never has to do arithmetic itself.
+  // "direction" is the authoritative up/down label; "pctChange" is already absolute.
+  const _chg = (cur, prior) => {
+    if(prior == null || Math.abs(prior) < 0.01) return null;
+    const pct = (cur - prior) / Math.abs(prior) * 100;
+    return { current: cur, prior, direction: pct >= 0 ? "increased" : "decreased", pctChange: Math.abs(pct).toFixed(1) };
+  };
   try {
     const payload = isInv
       ? {
@@ -1834,8 +1841,19 @@ async function rewriteWithClaude(kind){
               capex: p.capex||0,
               capexItems: (p.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount}))
             })),
+            capex: metrics.capex||0,
           },
           prevMetrics: state.invPrevMetrics || null,
+          precomputedChanges: (() => {
+            const p = state.invPrevMetrics;
+            if(!p) return null;
+            return {
+              income:    _chg(metrics.totalIncome,  p.totalIncome),
+              expenses:  _chg(metrics.totalExpense, p.totalExpense),
+              capex:     _chg(metrics.capex,        p.capex),
+              occupancy: p.occupancy != null ? { current: metrics.occupancy, prior: p.occupancy, direction: metrics.occupancy >= p.occupancy ? "increased" : "decreased", change: metrics.occupancy - p.occupancy } : null,
+            };
+          })(),
         }
       : {
           kind:'single',
@@ -1882,6 +1900,16 @@ async function rewriteWithClaude(kind){
             noi: state.prevMetrics.noi, capex: state.prevMetrics.capex, occupancy: state.prevMetrics.occupancy,
             expenseCategories: (state.prevMetrics.expenseCategories||[]).map(c=>({name:c.name,amount:c.amount})),
           } : null,
+          precomputedChanges: (() => {
+            const p = state.prevMetrics;
+            if(!p) return null;
+            return {
+              income:    _chg(metrics.totalIncome,  p.income),
+              expenses:  _chg(metrics.totalExpense, p.expenses),
+              capex:     _chg(metrics.capex,        p.capex),
+              occupancy: p.occupancy != null ? { current: metrics.occupancy, prior: p.occupancy, direction: metrics.occupancy >= p.occupancy ? "increased" : "decreased", change: metrics.occupancy - p.occupancy } : null,
+            };
+          })(),
         };
 
     const { data, error } = await sb.functions.invoke('narratives', { body: payload });
