@@ -822,6 +822,7 @@ function loadSave(key){
     const restoredPrevMetrics=data.prevMetrics
       ? {...data.prevMetrics, expenseCategories:data.prevMetrics.expenseCategories||[]}
       : null;
+    _homeShowAll=false;
     state={...state,
       showHome:false, source:data.source||null,
       propertyName:data.propertyName||"", currentQuarter:data.currentQuarter||"",
@@ -1075,6 +1076,7 @@ function selectSource(src){
   state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}};
   render();
 }
+let _homeShowAll = false; // toggled by "Show more / Show less" on home screen
 function renderHome(){
   document.getElementById("home-link").innerHTML="";
   document.getElementById("steps-indicator").innerHTML="";
@@ -1105,22 +1107,33 @@ function renderHome(){
         <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Saved Reports</h2>
         <p style="font-size:13px;color:#5a8070">Resume where you left off, or start a fresh report.</p>
       </div>
-      <button onclick="resetAll();state.showHome=false;render()"
+      <button onclick="resetAll();state.showHome=false;_homeShowAll=false;render()"
         style="background:#1a3a35;color:white;border:none;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0">
         + New Report
       </button>
     </div>
-    ${saves.length?saves.map(s=>`
-      <div class="home-card">
-        <div style="flex:1;min-width:0">
-          <div class="home-prop">🏢 ${escapeHtml(s.propertyName||"Unnamed Property")} — ${escapeHtml(s.quarter||"Unknown Quarter")}</div>
-          <div class="home-meta">Last saved ${escapeHtml(fmtDate(s.savedAt))} · ${stepLabel(s.step)}${s.source?` · <span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;background:${s.source==='appfolio'?'#e0f2fe':s.source==='investment'?'#f3e8ff':'#dcfce7'};color:${s.source==='appfolio'?'#0369a1':s.source==='investment'?'#7c3aed':'#15803d'}">${s.source==='appfolio'?'AppFolio':s.source==='investment'?'Multi-Property':'Buildium'}</span>`:""}</div>
-        </div>
-        <div style="display:flex;gap:8px;flex-shrink:0">
-          <button class="home-delete-btn" onclick="deleteSave('${attrJs(s.key)}')">Delete</button>
-          <button class="home-resume-btn" onclick="loadSave('${attrJs(s.key)}')">Resume →</button>
-        </div>
-      </div>`).join(""):`<div style="background:white;border:1px solid #c8e6de;border-radius:12px;padding:24px;text-align:center;color:#9ca3af;font-size:13px;margin-bottom:16px;">No saved reports yet.</div>`}
+    ${(()=>{
+      if(!saves.length) return `<div style="background:white;border:1px solid #c8e6de;border-radius:12px;padding:24px;text-align:center;color:#9ca3af;font-size:13px;margin-bottom:16px;">No saved reports yet.</div>`;
+      const RECENT = 3;
+      const cardHtml = s => `
+        <div class="home-card">
+          <div style="flex:1;min-width:0">
+            <div class="home-prop">🏢 ${escapeHtml(s.propertyName||"Unnamed Property")} — ${escapeHtml(s.quarter||"Unknown Quarter")}</div>
+            <div class="home-meta">Last saved ${escapeHtml(fmtDate(s.savedAt))} · ${stepLabel(s.step)}${s.source?` · <span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;background:${s.source==='appfolio'?'#e0f2fe':s.source==='investment'?'#f3e8ff':'#dcfce7'};color:${s.source==='appfolio'?'#0369a1':s.source==='investment'?'#7c3aed':'#15803d'}">${s.source==='appfolio'?'AppFolio':s.source==='investment'?'Multi-Property':'Buildium'}</span>`:""}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0">
+            <button class="home-delete-btn" onclick="deleteSave('${attrJs(s.key)}')">Delete</button>
+            <button class="home-resume-btn" onclick="loadSave('${attrJs(s.key)}')">Resume →</button>
+          </div>
+        </div>`;
+      const recent = saves.slice(0, RECENT);
+      const older  = saves.slice(RECENT);
+      const showAll = _homeShowAll;
+      return recent.map(cardHtml).join("") + (older.length ? (showAll
+        ? older.map(cardHtml).join("") + `<button onclick="_homeShowAll=false;renderHome()" style="width:100%;margin-top:4px;padding:9px;border-radius:8px;border:1px solid #c8e6de;background:white;color:#5a8070;font-size:13px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif">Show less ↑</button>`
+        : `<button onclick="_homeShowAll=true;renderHome()" style="width:100%;margin-top:4px;padding:9px;border-radius:8px;border:1px solid #c8e6de;background:white;color:#5a8070;font-size:13px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif">Show ${older.length} more older report${older.length===1?'':'s'} ↓</button>`
+      ) : "");
+    })()}
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">
       <div style="font-size:12px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Data &amp; Backup</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
