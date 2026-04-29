@@ -489,7 +489,7 @@ function _makeDefaultState(){
 let state = _makeDefaultState();
 // ─── SAVE / RESUME ───────────────────────────────────────────────────────────
 function getSavesIndex(){try{return JSON.parse(dbGet(SAVES_INDEX_KEY)||"[]");}catch(e){return[];}}
-function saveKey(name,quarter){return(name+"_"+quarter).replace(/[^a-z0-9]/gi,"_").toLowerCase();}
+function saveKey(name,quarter){return(name+"_"+quarter).replace(/['''ʼ]/g,"").replace(/[^a-z0-9]/gi,"_").toLowerCase();}
 function saveChartsForKey(k,charts){if(!k)return;dbSet(CHARTS_PREFIX+k,JSON.stringify(charts));}
 function loadChartsForKey(k){if(!k)return null;try{const d=dbGet(CHARTS_PREFIX+k);return d?JSON.parse(d):null;}catch(e){return null;}}
 function saveInvChartsForKey(k,charts){if(!k)return;dbSet(INV_CHARTS_PREFIX+k,JSON.stringify(charts));}
