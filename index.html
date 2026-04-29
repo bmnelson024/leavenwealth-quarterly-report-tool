@@ -1828,16 +1828,30 @@ async function rewriteWithClaude(kind){
             capex: metrics.capex, cashOnHand: metrics.cashOnHand,
             capexItems: (metrics.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount})),
             expenseCategories: (metrics.expenseCategories||[]).map(c=>({name:c.name,amount:c.amount})),
-            // capexDetail provides qualitative project context only.
-            // totalCapex is intentionally excluded — use metrics.capex (above) for the quarter total.
-            // capexDetail spans the full uploaded file and is NOT filtered to this quarter.
-            capexDetail: metrics.remodels ? {
-              remodelCount: metrics.remodels.remodelCount,
-              remodelUnits: metrics.remodels.remodelUnits,
-              topTransactions: (metrics.remodels.topTransactions||[]).slice(0,8),
-              themes: (metrics.remodels.themes||[]).slice(0,6),
-              sectionTotals: (metrics.remodels.sectionTotals||[]).slice(0,6),
-            } : null,
+            // capexDetail: project-level context filtered to current quarter only.
+            // topTransactions are filtered by parsed date so Claude only narrates
+            // capital work that actually happened this quarter.
+            capexDetail: metrics.remodels ? (()=>{
+              const m=(state.currentQuarter||"").match(/[Qq]\s*([1-4])[\s\/\-]*(\d{4})/);
+              const qRange = m ? (()=>{
+                const q=parseInt(m[1]),yr=parseInt(m[2]),qs=[0,3,6,9];
+                return {start:new Date(yr,qs[q-1],1), end:new Date(yr,qs[q-1]+3,0,23,59,59)};
+              })() : null;
+              const qtxns=(metrics.remodels.topTransactions||[]).filter(t=>{
+                if(!t.date) return false; // exclude undated — can't confirm quarter
+                if(!qRange) return true;
+                const d=new Date(t.date);
+                return !isNaN(d.getTime()) && d>=qRange.start && d<=qRange.end;
+              }).slice(0,8);
+              if(!qtxns.length && !(metrics.remodels.remodelCount)) return null;
+              return {
+                remodelCount: metrics.remodels.remodelCount,
+                remodelUnits: metrics.remodels.remodelUnits,
+                topTransactions: qtxns,
+                themes: (metrics.remodels.themes||[]).slice(0,6),
+                sectionTotals: (metrics.remodels.sectionTotals||[]).slice(0,6),
+              };
+            })() : null,
           },
           prevMetrics: state.prevMetrics ? {
             totalIncome: state.prevMetrics.income, totalExpense: state.prevMetrics.expenses,
@@ -5767,8 +5781,14 @@ function parseCapexDetail(fileData) {
                    : parseCur(String(amtRaw||"").replace(/^"|"$/g,""));
       if(!amount) continue;
 
+      // Parse the transaction date so callers can filter to a specific quarter.
+      let parsedDate = null;
+      if(dateVal instanceof Date){ parsedDate = dateVal; }
+      else if(typeof dateVal==="number" && dateVal>40000){ parsedDate = new Date((dateVal-25569)*86400*1000); }
+      else { const ds=String(dateVal||"").trim(); if(ds){const d=new Date(ds);if(!isNaN(d.getTime()))parsedDate=d;} }
+
       const theme = classify(desc) || classify(name);
-      transactions.push({ amount, name, description:desc, section:currentSection||"", theme });
+      transactions.push({ amount, name, description:desc, section:currentSection||"", theme, date:parsedDate });
 
       // Aggregate section / theme totals on positive amounts only
       if(amount>0 && currentSection){
@@ -5806,6 +5826,7 @@ function parseCapexDetail(fileData) {
         name: t.name,
         description: t.description,
         theme: t.theme||null,
+        date: t.date ? t.date.toISOString().slice(0,10) : null,
       }));
     const themes = [...themeMap.entries()]
       .map(([name,v])=>({ name, amount: Math.round(v.amount), count: v.count }))
