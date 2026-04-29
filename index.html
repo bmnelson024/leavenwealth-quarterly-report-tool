@@ -2452,7 +2452,7 @@ function loadInvChart(key){
   inp.onchange=e=>{
     const f=e.target.files[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{state.invCharts[key]=ev.target.result;saveInvChartsForKey(currentSaveKey(),state.invCharts);render();};
+    r.onload=ev=>{state.invCharts[key]=ev.target.result;saveInvChartsForKey(currentSaveKey(),state.invCharts);_refreshInvReportHTML();render();};
     r.onerror=()=>showError("Could not read \""+f.name+"\". The file may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
@@ -2474,6 +2474,7 @@ function loadAllInvCharts(){
     });
     function afterLoad(m,u){
       saveInvChartsForKey(currentSaveKey(),state.invCharts);
+      _refreshInvReportHTML();
       render();
       const msgs=[];
       if(u.length>0) msgs.push("Could not match "+u.length+" file(s): "+u.join(", ")+".");
@@ -4567,12 +4568,25 @@ function loadFile(key, asBuffer, cb){
   };
   inp.click();
 }
+// ── Live chart refresh helpers ─────────────────────────────────────────────
+// When a chart is added or removed after a report has already been generated,
+// rebuild the cached HTML so the iframe immediately reflects the new chart.
+function _refreshReportHTML(){
+  if(!state.reportHTML || !state.metrics) return;
+  const chartSrc = k => state.charts[k] || null;
+  state.reportHTML = buildReport(state.metrics, state.narratives, chartSrc, state.propertyPhoto, state.propertyName, state.currentQuarter, state.prevQuarterLabel, state.assetFacts||{}, state.prevMetrics||PREV_SAFE);
+}
+function _refreshInvReportHTML(){
+  if(!state.invReportHTML || !state.invMetrics) return;
+  state.invReportHTML = buildInvestmentReport(state.invMetrics, state.invNarratives, state.investmentName, state.currentQuarter, state.invLoan, state.invSections);
+}
+
 function loadChart(key){
   const inp=document.createElement("input"); inp.type="file"; inp.accept=".png,.jpg,.jpeg";
   inp.onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader();
-    r.onload=ev=>{ state.charts[key]=ev.target.result; saveChartsForKey(currentSaveKey(),state.charts); render(); };
+    r.onload=ev=>{ state.charts[key]=ev.target.result; saveChartsForKey(currentSaveKey(),state.charts); _refreshReportHTML(); render(); };
     r.onerror=()=>showError("Could not read \""+f.name+"\". The file may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
@@ -4581,11 +4595,13 @@ function loadChart(key){
 function clearChart(key){
   state.charts[key]=null;
   saveChartsForKey(currentSaveKey(),state.charts);
+  _refreshReportHTML();
   render();
 }
 function clearInvChart(key){
   state.invCharts[key]=null;
   saveInvChartsForKey(currentSaveKey(),state.invCharts);
+  _refreshInvReportHTML();
   render();
 }
 // ─── CHART FILENAME MAPPING ───────────────────────────────────────────────────
@@ -4630,6 +4646,7 @@ function loadAllCharts(){
     });
     function afterLoad(matched,unmatched){
       saveChartsForKey(currentSaveKey(),state.charts);
+      _refreshReportHTML();
       render();
       const msgs=[];
       if(unmatched.length>0) msgs.push("Could not match "+unmatched.length+" file(s): "+unmatched.join(", ")+". Check filenames and try uploading manually.");
