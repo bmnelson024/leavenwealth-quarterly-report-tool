@@ -197,6 +197,7 @@ const PROPERTY_ALIASES = [
   ["The Venice", "4916 California"],
   ["321 Townhomes", "Independence 18"],
   ["The Maples", "Maple Park", "The Enclave"],
+  ["Patrick's Place", "Patricks Place"],
 ];
 // Returns all known equivalent names for a property (always includes the name
 // itself). Used to expand comparisons through the alias table.
@@ -1421,11 +1422,12 @@ const communityMatches = (communityName, propName) => {
   const commAliases = getPropertyAliases(String(communityName||""));
   const propAliases = getPropertyAliases(String(propName||""));
   const _match = (a, b) => {
-    const c = a.toLowerCase().trim();
-    const p = b.toLowerCase().trim();
-    if(!c || !p) return false;
-    const cN = c.replace(/\s+/g," ");
-    const pN = p.replace(/\s+/g," ");
+    // Normalize: lowercase, collapse whitespace, strip apostrophes (straight
+    // and curly) so "Patrick's Place" == "Patricks Place", etc.
+    const norm = s => s.toLowerCase().trim().replace(/\s+/g," ").replace(/['‘’ʼ]/g,"");
+    const cN = norm(a);
+    const pN = norm(b);
+    if(!cN || !pN) return false;
     if(cN === pN) return true;
     // Word-boundary containment: one name is a full token-bounded substring
     // of the other — guards against partial hits like "park" in "riverpark".
