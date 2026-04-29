@@ -2981,8 +2981,9 @@ function parsePropertyMetrics(prop){
       if(!totalIncome && !totalExpense){
         showError("Warning: Income statement for \""+prop.name+"\" parsed but contained no totals. Verify the file format.");
       }
-      if(!hasPropTaxLine(_propIncomeRows)){
-        // Accumulate per-property warnings; shown after all properties are processed
+      if(propTaxStatus(_propIncomeRows) !== "ok"){
+        // Accumulate per-property warnings; shown after all properties are processed.
+        // Catches both "row missing entirely" and "row exists but blank for this quarter".
         if(!window._propTaxMissingProps) window._propTaxMissingProps=[];
         window._propTaxMissingProps.push(prop.name);
       }
@@ -5887,8 +5888,11 @@ function showWarning(msg){
 function clearWarning(){ showWarning(""); }
 
 // ── Property tax detection ────────────────────────────────────────────────
-// Returns true if the income statement rows contain a line item that looks like
-// a property tax or escrow entry. Add more patterns here as new PM labels emerge.
+// Returns true if the income statement rows contain a property tax / escrow line
+// item with a non-zero value in the current quarter's columns.
+// A row that exists but has all-zero quarterly amounts (e.g. taxes paid in prior
+// months only) is treated the same as a missing row — both trigger the warning.
+// Add more patterns here as new PM labels emerge.
 const PROP_TAX_PATTERNS = [
   /property\s+tax/i,
   /mortgage\s+escrow/i,
@@ -5899,16 +5903,36 @@ const PROP_TAX_PATTERNS = [
 ];
 function hasPropTaxLine(incomeRows){
   if(!incomeRows || !incomeRows.length) return false;
-  return incomeRows.some(row => PROP_TAX_PATTERNS.some(p => p.test(row.label||"")));
+  // Require both a matching label AND a non-zero quarterly amount so a row that
+  // exists but has blank/zero values for the current quarter still triggers a warning.
+  return incomeRows.some(row =>
+    PROP_TAX_PATTERNS.some(p => p.test(row.label||"")) &&
+    row.amount != null && row.amount !== 0
+  );
+}
+// Returns "ok" | "zero" | "missing" so callers can tailor the warning message.
+function propTaxStatus(incomeRows){
+  if(!incomeRows || !incomeRows.length) return "missing";
+  const hasLabel = incomeRows.some(row => PROP_TAX_PATTERNS.some(p => p.test(row.label||"")));
+  if(!hasLabel) return "missing";
+  const hasValue = incomeRows.some(row =>
+    PROP_TAX_PATTERNS.some(p => p.test(row.label||"")) &&
+    row.amount != null && row.amount !== 0
+  );
+  return hasValue ? "ok" : "zero";
 }
 function warnIfNoPropTax(incomeRows, propertyName){
-  if(hasPropTaxLine(incomeRows)){
+  const status = propTaxStatus(incomeRows);
+  if(status === "ok"){
     clearWarning();
   } else {
     const who = propertyName ? `<strong>${escapeHtml(propertyName)}</strong>` : "this property";
+    const detail = status === "zero"
+      ? `A property tax line was found but had <strong>no value for the current quarter's months</strong> — taxes may only appear in prior months of the T-12.`
+      : `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found.`;
     showWarning(
-      `⚠️ <strong>Property tax not detected</strong> in the income statement for ${who}. ` +
-      `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found. ` +
+      `⚠️ <strong>Property tax not detected for the current quarter</strong> in the income statement for ${who}. ` +
+      `${detail} ` +
       `If property taxes are paid semi-annually rather than monthly, the quarter's expenses will be skewed. ` +
       `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`
     );
