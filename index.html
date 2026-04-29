@@ -213,7 +213,8 @@ function getPropertyAliases(name){
 const makeDefaultSections = () => ({
   summary: true, snapshot: true, financialCharts: true, leasing: true,
   incomeStatement: true, balanceSheet: true, rentRoll: true,
-  capitalImprovements: true, capexCharts: true
+  capitalImprovements: true, capexCharts: true,
+  loanPrincipal: true, writeoffs: true
 });
 // ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://beoquaazkkxjisxnmrmg.supabase.co";
@@ -471,6 +472,7 @@ function _makeDefaultState(){
     invMetrics: null,
     invReportHTML: null,
     invLoan: { principalInception:"", principalInceptionDate:"", principalCurrent:"", principalCurrentDate:"", writeoffs:"" },
+    loan:    { principalInception:"", principalInceptionDate:"", principalCurrent:"", principalCurrentDate:"", writeoffs:"" },
     invPrevMetrics: null,
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
@@ -666,6 +668,7 @@ function saveProgress(options){
     invProperties:savableInvProperties,
     invMetrics:state.invMetrics||null,
     invNarratives:state.invNarratives||{income:"",expenses:"",capex:"",outlook:""},
+    loan:state.loan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
@@ -843,6 +846,7 @@ function loadSave(key){
       invCharts:{...emptyInvCharts,...(loadInvChartsForKey(key)||{})},
       invMetrics:data.invMetrics||null,
       invNarratives:data.invNarratives||{income:"",expenses:"",capex:"",outlook:""},
+      loan:data.loan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
@@ -1037,6 +1041,7 @@ function selectSource(src){
   state.source = src || null;
   // Always reset these investment-specific fields — stale values cause incorrect
   // prior-quarter labels and loan data to bleed across sessions.
+  state.loan    = {principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""};
   state.invLoan = {principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""};
   state.invPrevMetrics = null;
   // Single-property files are always reset — they cannot leak across sources.
@@ -1981,7 +1986,9 @@ const buildReport = (m, n, chartSrc, photo, propertyName, quarter, prevLabel, as
     financialCharts:     _sec.financialCharts     !== false && _hasFinancialCharts,
     leasing:             _sec.leasing             !== false && (_hasLeasingData || _hasLeasingCharts),
     capitalImprovements: _sec.capitalImprovements !== false && _hasCapex,
-    capexCharts:         _sec.capexCharts         !== false && _hasCapexCharts
+    capexCharts:         _sec.capexCharts         !== false && _hasCapexCharts,
+    loanPrincipal:       _sec.loanPrincipal       !== false,
+    writeoffs:           _sec.writeoffs           !== false
   };
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${prop} ${qtr} Investor Report</title>
@@ -2139,6 +2146,36 @@ ${secOn.snapshot?`<div class="page">
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
   <div class="pgn">${pg.v()}</div>
 </div>`:""}
+${(()=>{
+  const loan = assetFacts._loan || state.loan || {};
+  const hasPrincipal = secOn.loanPrincipal && (loan.principalInception || loan.principalCurrent);
+  const hasWriteoffs  = secOn.writeoffs     && loan.writeoffs;
+  if(!hasPrincipal && !hasWriteoffs) return "";
+  const fmtL = v => { const n=parseFloat(String(v).replace(/[,$]/g,"")); return isNaN(n)?"—":"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  const fmtL0 = v => { const n=parseFloat(String(v).replace(/[,$]/g,"")); return isNaN(n)?"—":"$"+Math.round(n).toLocaleString("en-US"); };
+  const loanInception     = loan.principalInception     ? fmtL(loan.principalInception)     : "—";
+  const loanCurrent       = loan.principalCurrent       ? fmtL(loan.principalCurrent)        : "—";
+  const loanInceptionDate = escapeHtml(loan.principalInceptionDate || "—");
+  const loanCurrentDate   = escapeHtml(loan.principalCurrentDate   || "—");
+  const writeoffsAmt      = loan.writeoffs ? fmtL0(loan.writeoffs) : "—";
+  return `<div class="page">
+  <div class="pn">${prop}</div><div class="sh">Loan & Write-off Summary — ${qtr}</div>
+  <div style="display:flex;gap:20px;margin-top:20px;flex-wrap:wrap">
+    ${hasPrincipal?`<div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #c8e6de;border-radius:12px;padding:20px 24px">
+      <div style="font-size:11px;font-weight:700;color:#2e7d6e;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Total Loan Principal Paid</div>
+      ${loan.principalInception?`<div style="margin-bottom:12px"><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${loanInceptionDate}</div><div style="font-size:26px;font-weight:700;color:#1a3a35">${loanInception}</div></div>`:""}
+      ${loan.principalCurrent?`<div><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${loanCurrentDate}</div><div style="font-size:26px;font-weight:700;color:#1a3a35">${loanCurrent}</div></div>`:""}
+    </div>`:""}
+    ${hasWriteoffs?`<div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #c8e6de;border-radius:12px;padding:20px 24px">
+      <div style="font-size:11px;font-weight:700;color:#2e7d6e;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Total Write-offs from Inception</div>
+      <div style="font-size:32px;font-weight:700;color:#1a3a35;margin-top:6px">${writeoffsAmt}</div>
+    </div>`:""}
+  </div>
+  <div class="footer-prop">${prop}</div>
+  <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
+  <div class="pgn">${pg.v()}</div>
+</div>`;
+})()}
 ${secOn.financialCharts?`<div class="page">
   <div class="pn">${prop}</div><div class="sh">Financial Charts</div>
   <div class="cg">
@@ -6212,6 +6249,41 @@ function render(){
           <div style="font-size:11px;color:#9ca3af">Shown on the investor snapshot page as "Cash on Hand".</div>
         </div>
       </div>`;
+    const loanBox = `
+      <div class="section-label" style="margin-top:12px">Loan &amp; Write-off Data</div>
+      <div class="econ-box">
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:${state.sections.loanPrincipal?'12':'4'}px;cursor:pointer;font-size:13px;font-weight:600;color:#1a3a35">
+          <input type="checkbox" ${state.sections.loanPrincipal?"checked":""} onchange="state.sections.loanPrincipal=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
+          Include Loan Principal Paid in report
+        </label>
+        ${state.sections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">Principal Paid (Inception)</div>
+            <input type="text" placeholder="e.g. 289,116.08" value="${escapeHtml(state.loan.principalInception)}"
+              oninput="state.loan.principalInception=this.value"
+              style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
+          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">As of Date (Inception)</div>
+            <input type="text" placeholder="e.g. 12/31/2024" value="${escapeHtml(state.loan.principalInceptionDate||"")}"
+              oninput="state.loan.principalInceptionDate=this.value"
+              style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
+          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">Principal Paid (Current)</div>
+            <input type="text" placeholder="e.g. 438,302.06" value="${escapeHtml(state.loan.principalCurrent)}"
+              oninput="state.loan.principalCurrent=this.value"
+              style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
+          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">As of Date (Current)</div>
+            <input type="text" placeholder="e.g. 03/31/2026" value="${escapeHtml(state.loan.principalCurrentDate)}"
+              oninput="state.loan.principalCurrentDate=this.value"
+              style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
+        </div>`:""}
+        <div style="border-top:1px solid #e5e7eb;padding-top:12px">
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:${state.sections.writeoffs?'10':'0'}px;cursor:pointer;font-size:13px;font-weight:600;color:#1a3a35">
+            <input type="checkbox" ${state.sections.writeoffs?"checked":""} onchange="state.sections.writeoffs=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
+            Include Total Write-offs in report
+          </label>
+          ${state.sections.writeoffs?`<input type="text" placeholder="e.g. 3,054,449" value="${escapeHtml(state.loan.writeoffs)}"
+            oninput="state.loan.writeoffs=this.value"
+            style="width:100%;max-width:260px;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/>`:""}
+        </div>
+      </div>`;
     const econBox = `
       <div class="section-label" style="margin-top:12px">Economic Occupancy</div>
       <div class="econ-box">
@@ -6234,13 +6306,6 @@ function render(){
     const mo=getQMonths(state.currentQuarter||"");
     const rrSection=`
       <div class="section-label" style="margin-top:12px">Rent Rolls <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${rrUploaded}/3 uploaded</span></div>
-      <div style="background:#e6f9f4;border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <div>
-          <div style="font-weight:600;font-size:13px;color:#1a3a35;margin-bottom:3px">Bulk Upload Rent Rolls</div>
-          <div style="font-size:11px;color:#5a8070">Select all 3 at once — matched by month name in filename, or assigned in order.</div>
-        </div>
-        <button class="upload-btn" style="white-space:nowrap;padding:8px 14px" onclick="loadAllRentRolls()">📂 Upload All 3</button>
-      </div>
       ${fileRow("rr1","Rent Roll — End of "+mo[0],"Pull at end of month",'text',"tryAutoFillPropertyName")}
       ${fileRow("rr2","Rent Roll — End of "+mo[1],"Pull at end of month",'text',"tryAutoFillPropertyName")}
       ${fileRow("rr3","Rent Roll — End of "+mo[2],"Pull at end of month",'text',"tryAutoFillPropertyName")}`;
@@ -6292,7 +6357,7 @@ function render(){
       ${fileRow("capexDetail","Capex Detail Report <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Transaction detail for capital improvements — used to identify remodeled units",'auto')}
       <div class="section-label" style="margin-top:12px">Rent Engine</div>
       ${fileRow("rentEngine","Leasing Data — Property Performance",`${state.propertyName||"Property"}, ${state.currentQuarter||""}`,'text')}
-      ${cashOnHandBox}${econBox}${chartsSection}
+      ${cashOnHandBox}${loanBox}${econBox}${chartsSection}
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="save-btn" style="flex:0 0 auto" onclick="saveProgress({allowEmpty:true})">💾 Save</button>
         <button class="process-btn" style="flex:1;margin:0" onclick="processDataWithConfirm()">Process Data →</button>
@@ -6314,7 +6379,7 @@ function render(){
       ${fileRow("renewalSummary","Renewal Summary","Renewal Summary report for the quarter",'text')}
       ${fileRow("delinquency","Delinquency As Of","Delinquency As Of report — current period",'text')}
       ${fileRow("capexDetail","Capital Expense Report <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","12-month cash flow or capital expense export — used to identify remodeled units and capex detail",'auto')}
-      ${cashOnHandBox}${econBox}${chartsSection}
+      ${cashOnHandBox}${loanBox}${econBox}${chartsSection}
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="save-btn" style="flex:0 0 auto" onclick="saveProgress({allowEmpty:true})">💾 Save</button>
         <button class="process-btn" style="flex:1;margin:0" onclick="processDataWithConfirm()">Process Data →</button>
@@ -6368,11 +6433,15 @@ function render(){
           financialCharts:    ()=>['chart_operating_income','chart_operating_expense','chart_income_vs_expense','chart_noi'].some(k=>state.charts[k]),
           leasing:            ()=>!!(m && (m.newLeases || m.renewals || m.inquiries || m.applications || m.lossToLease)) || ['chart_lease_expirations','chart_rent_growth','chart_occupancy_rate','chart_loss_to_lease','chart_utility_income_expense'].some(k=>state.charts[k]),
           capitalImprovements:()=>!!(m && (m.capex || (m.capexItems && m.capexItems.length))),
-          capexCharts:        ()=>['chart_capital_expense','chart_maintenance_expense'].some(k=>state.charts[k])
+          capexCharts:        ()=>['chart_capital_expense','chart_maintenance_expense'].some(k=>state.charts[k]),
+          loanPrincipal:      ()=>!!(state.loan && state.loan.principalInception),
+          writeoffs:          ()=>!!(state.loan && state.loan.writeoffs)
         };
         const sections = [
           {key:'summary',             label:'Summary Page'},
           {key:'snapshot',            label:'Snapshot Page'},
+          {key:'loanPrincipal',       label:'Loan Principal Paid'},
+          {key:'writeoffs',           label:'Total Write-offs'},
           {key:'incomeStatement',     label:'Income Statement'},
           {key:'balanceSheet',        label:'Balance Sheet'},
           {key:'rentRoll',            label:'Rent Roll'},
