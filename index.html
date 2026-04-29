@@ -745,7 +745,11 @@ function canAutoSave(){
   if(state.showHome || !state.source) return false;
   const isInv = state.source === 'investment';
   const name = isInv ? state.investmentName : state.propertyName;
-  return !!(name && state.currentQuarter);
+  // Require a fully-normalised quarter (Q[1-4] YYYY) so an autosave mid-keystroke
+  // (e.g. just "Q1" before the year is typed) doesn't create an orphan save key
+  // that produces a duplicate entry on the home screen.
+  const qNorm = normalizeQuarter(state.currentQuarter || "");
+  return !!(name && /^Q[1-4] \d{4}$/.test(qNorm));
 }
 function scheduleAutoSave(){
   if(!canAutoSave()) return;
