@@ -436,7 +436,7 @@ function _makeDefaultState(){
     currentQuarter: "",
     prevQuarterLabel: "",
     files: { income:null, rr1:null, rr2:null, rr3:null, leasing:null, leasingSummary:null, renewalSummary:null, delinquency:null, rentEngine:null, capexDetail:null, balanceSheet:null },
-    charts: { chart_operating_income:null, chart_operating_expense:null, chart_income_vs_expense:null, chart_noi:null, chart_lease_expirations:null, chart_rent_growth:null, chart_occupancy_rate:null, chart_capital_expense:null, chart_maintenance_expense:null, chart_loss_to_lease:null },
+    charts: { chart_operating_income:null, chart_operating_expense:null, chart_income_vs_expense:null, chart_noi:null, chart_lease_expirations:null, chart_rent_growth:null, chart_occupancy_rate:null, chart_capital_expense:null, chart_maintenance_expense:null, chart_loss_to_lease:null, chart_utility_income_expense:null },
     econOcc: { m1:"", m2:"", m3:"" },
     propertyPhoto: null,
     photoAutoLoaded: false,   // true when photo came from db lookup (vs manual upload) — triggers verify-notice in UI
@@ -811,7 +811,7 @@ function loadSave(key){
   try{
     const data=JSON.parse(dbGet(SAVE_PREFIX+key)||"null");
     if(!data){showError("Save data not found.");return;}
-    const emptyCharts={chart_operating_income:null,chart_operating_expense:null,chart_income_vs_expense:null,chart_noi:null,chart_lease_expirations:null,chart_rent_growth:null,chart_occupancy_rate:null,chart_capital_expense:null,chart_maintenance_expense:null,chart_loss_to_lease:null};
+    const emptyCharts={chart_operating_income:null,chart_operating_expense:null,chart_income_vs_expense:null,chart_noi:null,chart_lease_expirations:null,chart_rent_growth:null,chart_occupancy_rate:null,chart_capital_expense:null,chart_maintenance_expense:null,chart_loss_to_lease:null,chart_utility_income_expense:null};
     const emptyInvCharts={inv_operating_income:null,inv_operating_expense:null,inv_income_by_property:null,inv_expense_by_property:null,inv_income_vs_expense:null,inv_noi:null,inv_noi_by_property:null,inv_utility:null,inv_lease_expirations:null,inv_rent_growth:null,inv_occupancy_rate:null,inv_occupancy_by_property:null};
     const restoredPhoto=loadPhotoForProperty(data.propertyName||'');
     // Restore expenseCategories into prevMetrics if present (Fix: was previously stripped on load)
@@ -1055,7 +1055,7 @@ function selectSource(src){
   state.suppIncome = {sfhIncome:'', sfhExpenses:'', locIncome:''};
   state.bgChampionCustom = {commentary:'', charts:[]};
   state.econOcc = {m1:'', m2:'', m3:''};
-  state.charts = {chart_operating_income:null,chart_operating_expense:null,chart_income_vs_expense:null,chart_noi:null,chart_lease_expirations:null,chart_rent_growth:null,chart_occupancy_rate:null,chart_capital_expense:null,chart_maintenance_expense:null,chart_loss_to_lease:null};
+  state.charts = {chart_operating_income:null,chart_operating_expense:null,chart_income_vs_expense:null,chart_noi:null,chart_lease_expirations:null,chart_rent_growth:null,chart_occupancy_rate:null,chart_capital_expense:null,chart_maintenance_expense:null,chart_loss_to_lease:null,chart_utility_income_expense:null};
   state.invCharts = {inv_operating_income:null,inv_operating_expense:null,inv_income_by_property:null,inv_expense_by_property:null,inv_income_vs_expense:null,inv_noi:null,inv_noi_by_property:null,inv_utility:null,inv_lease_expirations:null,inv_rent_growth:null,inv_occupancy_rate:null,inv_occupancy_by_property:null};
   state.generating = false;
   state.step = 0;
@@ -1938,7 +1938,7 @@ const buildReport = (m, n, chartSrc, photo, propertyName, quarter, prevLabel, as
   const _hasRentRoll = !!(m && m.rentRollRows && m.rentRollRows.length);
   const _hasFinancialCharts = ['chart_operating_income','chart_operating_expense','chart_income_vs_expense','chart_noi'].some(k=>chartSrc(k));
   const _hasLeasingData = !!(m && (m.newLeases || m.renewals || m.inquiries || m.applications || m.lossToLease));
-  const _hasLeasingCharts = ['chart_lease_expirations','chart_rent_growth','chart_occupancy_rate','chart_loss_to_lease'].some(k=>chartSrc(k));
+  const _hasLeasingCharts = ['chart_lease_expirations','chart_rent_growth','chart_occupancy_rate','chart_loss_to_lease','chart_utility_income_expense'].some(k=>chartSrc(k));
   const _hasCapex = !!(m && (m.capex || (m.capexItems && m.capexItems.length)));
   const _hasCapexCharts = ['chart_capital_expense','chart_maintenance_expense'].some(k=>chartSrc(k));
   const secOn = {
@@ -2130,7 +2130,7 @@ ${secOn.leasing?`<div class="page">
     ${m.capex?`<div class="lc"><div class="ll">Capex Total</div><div class="lv">${fmtWhole(m.capex)}</div></div>`:""}
   </div>
   ${_hasLeasingCharts?`<div class="cg">
-    ${["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_occupancy_rate:Occupancy Rate","chart_loss_to_lease:Loss to Lease"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
+    ${["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_occupancy_rate:Occupancy Rate","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
   </div>`:""}
   <div class="footer-prop">${prop}</div>
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
@@ -4600,7 +4600,8 @@ const CHART_MAP = [
   { key:"chart_occupancy_rate",    match:"occupancy rate per unit" },
   { key:"chart_capital_expense",   match:"capital expense" },
   { key:"chart_maintenance_expense",match:"maintenance expense" },
-  { key:"chart_loss_to_lease",     match:"loss to lease" },
+  { key:"chart_loss_to_lease",          match:"loss to lease" },
+  { key:"chart_utility_income_expense", match:"utility income" },
 ];
 function loadAllCharts(){
   const inp=document.createElement("input"); inp.type="file"; inp.accept=".png,.jpg,.jpeg"; inp.multiple=true;
@@ -6206,6 +6207,7 @@ function render(){
         ${chartRow("chart_capital_expense","Capital Expense")}
         ${chartRow("chart_maintenance_expense","Maintenance Expense")}
         ${chartRow("chart_loss_to_lease","Loss to Lease")}
+        ${chartRow("chart_utility_income_expense","Utility Income vs. Expense")}
       </div>`;
     if(state.source==='buildium'){
       el.innerHTML = commonTop + `
@@ -6302,7 +6304,7 @@ function render(){
           balanceSheet:       ()=>!!(m && m.balanceSheet && m.balanceSheet.rows && m.balanceSheet.rows.length),
           rentRoll:           ()=>!!(m && m.rentRollRows && m.rentRollRows.length),
           financialCharts:    ()=>['chart_operating_income','chart_operating_expense','chart_income_vs_expense','chart_noi'].some(k=>state.charts[k]),
-          leasing:            ()=>!!(m && (m.newLeases || m.renewals || m.inquiries || m.applications || m.lossToLease)) || ['chart_lease_expirations','chart_rent_growth','chart_occupancy_rate','chart_loss_to_lease'].some(k=>state.charts[k]),
+          leasing:            ()=>!!(m && (m.newLeases || m.renewals || m.inquiries || m.applications || m.lossToLease)) || ['chart_lease_expirations','chart_rent_growth','chart_occupancy_rate','chart_loss_to_lease','chart_utility_income_expense'].some(k=>state.charts[k]),
           capitalImprovements:()=>!!(m && (m.capex || (m.capexItems && m.capexItems.length))),
           capexCharts:        ()=>['chart_capital_expense','chart_maintenance_expense'].some(k=>state.charts[k])
         };
