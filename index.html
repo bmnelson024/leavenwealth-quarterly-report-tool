@@ -280,8 +280,9 @@ function _isCacheOnlyKey(k){
 // Pull every persisted row out of Supabase into _dbCache, then derive the
 // saves index locally. Called on login / page reload after auth succeeds.
 async function supaBootstrap(){
-  // Wipe any stale cache from a prior user on this browser before loading.
-  for(const k of Object.keys(_dbCache)) delete _dbCache[k];
+  // Fetch all rows into a fresh map BEFORE touching _dbCache so that a network
+  // failure mid-load never leaves the cache in a half-empty state.
+  const fresh = {};
   const pageSize = 1000;
   let from = 0;
   while(true){
@@ -291,10 +292,13 @@ async function supaBootstrap(){
       .range(from, from + pageSize - 1);
     if(error) throw error;
     if(!data || data.length === 0) break;
-    for(const row of data) _dbCache[row.key] = row.value;
+    for(const row of data) fresh[row.key] = row.value;
     if(data.length < pageSize) break;
     from += pageSize;
   }
+  // Only now swap the cache — all-or-nothing, no partial wipe.
+  for(const k of Object.keys(_dbCache)) delete _dbCache[k];
+  for(const [k,v] of Object.entries(fresh)) _dbCache[k] = v;
   // Rebuild the saves index from the lw_save_* rows we just loaded so the
   // home screen can list everyone's reports even if a teammate saved while
   // you were offline.
@@ -4755,7 +4759,9 @@ function loadAllBuildiumFiles(){
   inp.onchange=e=>{
     const files=Array.from(e.target.files);
     if(!files.length) return;
-    const norm=s=>s.replace(/_/g," ").toLowerCase();
+    // Normalise: split camelCase, underscores/hyphens→spaces, lowercase.
+    // e.g. "IncomeStatement" → "income statement", "RentEngine" → "rent engine"
+    const norm=s=>s.replace(/([a-z])([A-Z])/g,"$1 $2").replace(/[_\-]/g," ").toLowerCase();
     const has=(fname,...terms)=>terms.some(t=>norm(fname).includes(t));
     const assigned={};
     const rrFiles=[];
@@ -4768,7 +4774,7 @@ function loadAllBuildiumFiles(){
       // term overlaps, but ordering is a cheap safeguard against future renames.
       if(has(base,"balance sheet"))
         {assigned.balanceSheet={file:f,asBuffer:true};return;}
-      if(has(base,"income statement","profit and loss","profit loss","p&l","cash flow"))
+      if(has(base,"income statement","profit and loss","profit loss","p&l","cash flow","t12","trailing 12","12 month","12month","operating statement"))
         {assigned.income={file:f,asBuffer:isExcel};return;}
       if(has(base,"rent roll"))
         {rrFiles.push(f);return;}
@@ -4776,15 +4782,17 @@ function loadAllBuildiumFiles(){
       // for capital accounts, sometimes downloaded with "capex" in the name.
       if(has(base,"capex detail","capex_detail","capex","transaction detail by account","transaction_detail_by_account"))
         {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
-      // "Leasing Agent Report" or similar. Check AFTER capex/rent-roll so
-      // those more specific matches win on filenames that include "leasing".
+      // Buildium Rent Engine / community performance export — must come BEFORE the
+      // generic "leasing" check because Buildium names this file
+      // "Leasing Data - Property Performance - ..." which contains "leasing".
+      if(has(base,"rent engine","community performance","leasing data","property performance"))
+        {assigned.rentEngine={file:f,asBuffer:'text'};return;}
+      // "Leasing Agent Report" or similar. Comes after rent engine so the more
+      // specific match wins when the filename contains both "leasing" and "data".
       if(has(base,"leasing agent","leasing report","activity by lease","leasing"))
         {assigned.leasing={file:f,asBuffer:'text'};return;}
       if(has(base,"delinquent","delinquency"))
         {assigned.delinquency={file:f,asBuffer:'text'};return;}
-      // Buildium community/rent-engine performance export.
-      if(has(base,"rent engine","community performance","leasing data","property performance"))
-        {assigned.rentEngine={file:f,asBuffer:'text'};return;}
       unmatched.push(f.name);
     });
     rrFiles.sort((a,b)=>rrSuffix(a.name)-rrSuffix(b.name));
@@ -4836,8 +4844,9 @@ function loadAllAFFiles(){
   inp.onchange=e=>{
     const files=Array.from(e.target.files);
     if(!files.length) return;
-    // Normalise: underscores→spaces and lowercase, so "rent_roll" matches "rent roll"
-    const norm=s=>s.replace(/_/g," ").toLowerCase();
+    // Normalise: split camelCase, underscores/hyphens→spaces, lowercase.
+    // e.g. "RentEngine_PropertyPerformance" → "rent engine property performance"
+    const norm=s=>s.replace(/([a-z])([A-Z])/g,"$1 $2").replace(/[_\-]/g," ").toLowerCase();
     const has=(fname,...terms)=>terms.some(t=>norm(fname).includes(t));
     const assigned={};
     const rrFiles=[];
