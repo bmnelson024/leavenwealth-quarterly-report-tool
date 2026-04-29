@@ -5034,7 +5034,7 @@ function uploadInvPropertyPhoto(propId){
   inp.onchange=e=>{
     const f=e.target.files[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(prop.name,compressed);render();});};
+    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(prop.name,compressed);_refreshInvReportHTML();render();});};
     r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
@@ -5045,7 +5045,7 @@ function uploadMWP5Photo(name){
   inp.onchange=e=>{
     const f=e.target.files[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(name,compressed);render();});};
+    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(name,compressed);_refreshInvReportHTML();render();});};
     r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
@@ -5094,6 +5094,7 @@ function loadPhoto(){
         state.propertyPhoto=compressed;
         state.photoAutoLoaded=false;   // user manually uploaded — clear the verify-notice
         savePhotoForProperty(state.propertyName, state.propertyPhoto);
+        _refreshReportHTML();
         render();
       });
     };
@@ -5106,6 +5107,7 @@ function clearPhoto(){
   removePhotoForProperty(state.propertyName);
   state.propertyPhoto=null;
   state.photoAutoLoaded=false;
+  _refreshReportHTML();
   render();
 }
 function calcPrevQuarterLabel(quarter){
