@@ -6,6 +6,7 @@
   <title>LeavenWealth — Quarterly Report Builder</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: Inter, sans-serif; background: #ffffff; color: #1a3a35; min-height: 100vh; }
@@ -186,6 +187,7 @@ const INV_CHARTS_PREFIX = "lw_invcharts_";
 const BG_CHAMPION_CHARTS_PREFIX = "lw_bgcc_";
 const FILES_PREFIX = "lw_files_";
 const INV_FILES_PREFIX = "lw_invfiles_";
+const VESTMINT_FINANCIALS_PREFIX = "lw_vmfin_";
 // ─── PROPERTY ALIASES ────────────────────────────────────────────────────────
 // Each inner array is a group of equivalent names for the same property.
 // Aliases are matched case-insensitively and checked bidirectionally wherever
@@ -380,7 +382,7 @@ function restoreBackup(){
           showError('Backup file format not recognized — expected a JSON object of saved keys.');
           return;
         }
-        const ALLOWED_PREFIXES=[SAVE_PREFIX,CHARTS_PREFIX,INV_CHARTS_PREFIX,FILES_PREFIX,INV_FILES_PREFIX,'lw_photo_','lw_assetfacts_',BG_CHAMPION_CHARTS_PREFIX];
+        const ALLOWED_PREFIXES=[SAVE_PREFIX,CHARTS_PREFIX,INV_CHARTS_PREFIX,FILES_PREFIX,INV_FILES_PREFIX,'lw_photo_','lw_assetfacts_',BG_CHAMPION_CHARTS_PREFIX,VESTMINT_FINANCIALS_PREFIX];
         const ALLOWED_EXACT=new Set([SAVES_INDEX_KEY]);
         const entries=Object.entries(data);
         const bad=[];
@@ -480,6 +482,13 @@ function _makeDefaultState(){
     businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{}, bpCurrentRentParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
+    // ── VestMint Fund mode state ──
+    vestmintFundOverview: "",   // editable fund summary / boilerplate text
+    vestmintFinancials: [],     // array of data URLs — pages rendered from uploaded financial-statement PDFs
+    vestmintOtherAssets: [],    // [{id, name, narrative}] — dynamically added investment sections
+    vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
+    vestmintHasProForma: true,
+    vmReportHTML: null,
     hasProForma: true,      // show "vs. Pro Forma" in single-property chart labels?
     rewritingClaude: false, // true while the Claude narrative rewrite is in-flight
     suppIncome: { sfhIncome:"", sfhExpenses:"", locIncome:"" },
@@ -496,6 +505,8 @@ function saveInvChartsForKey(k,charts){if(!k)return;dbSet(INV_CHARTS_PREFIX+k,JS
 function loadInvChartsForKey(k){if(!k)return null;try{const d=dbGet(INV_CHARTS_PREFIX+k);return d?JSON.parse(d):null;}catch(e){return null;}}
 function saveBgChampionChartsForKey(k,charts){if(!k)return;dbSet(BG_CHAMPION_CHARTS_PREFIX+k,JSON.stringify(charts));}
 function loadBgChampionChartsForKey(k){if(!k)return[];try{const d=dbGet(BG_CHAMPION_CHARTS_PREFIX+k);return d?JSON.parse(d):[];}catch(e){return[];}}
+function saveVestmintFinancialsForKey(k,pages){if(!k)return;dbSet(VESTMINT_FINANCIALS_PREFIX+k,JSON.stringify(pages));}
+function loadVestmintFinancialsForKey(k){if(!k)return[];try{const d=dbGet(VESTMINT_FINANCIALS_PREFIX+k);return d?JSON.parse(d):[];}catch(e){return[];}}
 // ── File persistence helpers ─────────────────────────────────────────────────
 // ArrayBuffers (Excel files) are serialized to base64; strings (CSVs) stored as-is.
 function _bufToB64(buf){const b=new Uint8Array(buf);let s='';const c=8192;for(let i=0;i<b.length;i+=c)s+=String.fromCharCode.apply(null,b.subarray(i,i+c));return btoa(s);}
@@ -508,7 +519,7 @@ function saveInvFilesForKey(k,props){if(!k)return;try{const out={};(props||[]).f
 function loadInvFilesForKey(k){if(!k)return{};try{const d=dbGet(INV_FILES_PREFIX+k);return d?JSON.parse(d):{};}catch(e){return{};}}
 function applyInvFiles(props,serialized){(props||[]).forEach(p=>{const s=serialized[p.id];if(s)p.files={...(p.files||{}),..._deserializeFiles(s)};});}
 // Current save key for the active report
-function currentSaveKey(){const isInv=state.source==='investment';const name=isInv?(state.investmentName||"investment"):(state.propertyName||"unnamed");return saveKey(name,state.currentQuarter||"unknown");}
+function currentSaveKey(){const isInv=state.source==='investment'||state.source==='vestmint';const name=isInv?(state.investmentName||state.source||"investment"):(state.propertyName||"unnamed");return saveKey(name,state.currentQuarter||"unknown");}
 // Returns all single-property saves that have metrics saved
 function getSinglePropertySaves(){
   return getSavesIndex().filter(s=>s.source!=='investment').map(s=>{
@@ -628,7 +639,7 @@ function saveProgress(options){
   options = options || {};
   const silent = !!options.silent;
   const allowEmpty = !!options.allowEmpty;
-  const isInv = state.source==='investment';
+  const isInv = state.source==='investment' || state.source==='vestmint';
   if(!isInv && !state.metrics && !allowEmpty){
     if(!silent) showError("Nothing to save yet — process your data files first.");
     return false;
@@ -678,6 +689,10 @@ function saveProgress(options){
     businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}},
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
+    vestmintFundOverview:state.vestmintFundOverview||"",
+    vestmintOtherAssets:state.vestmintOtherAssets||[],
+    vestmintSections:state.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
+    vestmintHasProForma:state.vestmintHasProForma!==false,
     savedAt:new Date().toISOString()
   };
   try{
@@ -689,6 +704,7 @@ function saveProgress(options){
       saveInvChartsForKey(key,state.invCharts);
       saveBgChampionChartsForKey(key,(state.bgChampionCustom&&state.bgChampionCustom.charts)||[]);
       if(filesChanged) saveInvFilesForKey(key,state.invProperties);
+      if(state.source==='vestmint') saveVestmintFinancialsForKey(key,state.vestmintFinancials||[]);
     } else {
       saveChartsForKey(key,state.charts);
       if(filesChanged) saveFilesForKey(key,state.files);
@@ -743,7 +759,7 @@ function armAutoSave(){ _autoSaveArmed = true; }
 function canAutoSave(){
   if(!_autoSaveArmed) return false;
   if(state.showHome || !state.source) return false;
-  const isInv = state.source === 'investment';
+  const isInv = state.source === 'investment' || state.source === 'vestmint';
   const name = isInv ? state.investmentName : state.propertyName;
   // Require a fully-normalised quarter (Q[1-4] YYYY) so an autosave mid-keystroke
   // (e.g. just "Q1" before the year is typed) doesn't create an orphan save key
@@ -860,6 +876,12 @@ function loadSave(key){
       businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}},
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
+      vestmintFundOverview:data.vestmintFundOverview||"",
+      vestmintFinancials:loadVestmintFinancialsForKey(key),
+      vestmintOtherAssets:data.vestmintOtherAssets||[],
+      vestmintSections:data.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
+      vestmintHasProForma:data.vestmintHasProForma!==false,
+      vmReportHTML:null,
       invReportHTML:null,
       // Reset transient UI flags — these are never saved and must not bleed across sessions
       _showInvPrevPicker:false, _invPrevSource:null,
@@ -892,6 +914,7 @@ function deleteSave(key){
     dbRemove(INV_CHARTS_PREFIX+key);
     dbRemove(FILES_PREFIX+key);
     dbRemove(INV_FILES_PREFIX+key);
+    dbRemove(VESTMINT_FINANCIALS_PREFIX+key);
     const idx=getSavesIndex().filter(s=>s.key!==key);
     dbSet(SAVES_INDEX_KEY,JSON.stringify(idx));
     if(idx.length===0){state.showHome=false;state.step=0;state.source=null;state.metrics=null;state.invMetrics=null;}
@@ -1015,6 +1038,10 @@ function confirmAndGenerateInv(){
   if(_flushAndCheckSaved()){generateInvestmentReport();return;}
   showSavePrompt(()=>generateInvestmentReport());
 }
+function confirmAndGenerateVestmint(){
+  if(_flushAndCheckSaved()){generateVestmintReport();return;}
+  showSavePrompt(()=>generateVestmintReport());
+}
 function showToast(msg){
   let t=document.getElementById("lw-toast");
   if(!t){t=document.createElement("div");t.id="lw-toast";t.className="toast";document.body.appendChild(t);}
@@ -1084,6 +1111,13 @@ function selectSource(src){
   state.invNarrativesEdited = false;
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
   state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}};
+  // VestMint Fund mode
+  state.vestmintFundOverview = "";
+  state.vestmintFinancials = [];
+  state.vestmintOtherAssets = [];
+  state.vestmintSections = {fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true};
+  state.vestmintHasProForma = true;
+  state.vmReportHTML = null;
   render();
 }
 let _homeShowAll = false; // toggled by "Show more / Show less" on home screen
@@ -1129,7 +1163,7 @@ function renderHome(){
         <div class="home-card">
           <div style="flex:1;min-width:0">
             <div class="home-prop">🏢 ${escapeHtml(s.propertyName||"Unnamed Property")} — ${escapeHtml(s.quarter||"Unknown Quarter")}</div>
-            <div class="home-meta">Last saved ${escapeHtml(fmtDate(s.savedAt))} · ${stepLabel(s.step)}${s.source?` · <span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;background:${s.source==='appfolio'?'#e0f2fe':s.source==='investment'?'#f3e8ff':'#dcfce7'};color:${s.source==='appfolio'?'#0369a1':s.source==='investment'?'#7c3aed':'#15803d'}">${s.source==='appfolio'?'AppFolio':s.source==='investment'?'Multi-Property':'Buildium'}</span>`:""}</div>
+            <div class="home-meta">Last saved ${escapeHtml(fmtDate(s.savedAt))} · ${stepLabel(s.step)}${s.source?` · <span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;background:${s.source==='appfolio'?'#e0f2fe':s.source==='investment'?'#f3e8ff':s.source==='vestmint'?'#d1fae5':'#dcfce7'};color:${s.source==='appfolio'?'#0369a1':s.source==='investment'?'#7c3aed':s.source==='vestmint'?'#065f46':'#15803d'}">${s.source==='appfolio'?'AppFolio':s.source==='investment'?'Multi-Property':s.source==='vestmint'?'VestMint Fund':'Buildium'}</span>`:""}</div>
           </div>
           <div style="display:flex;gap:8px;flex-shrink:0">
             <button class="home-delete-btn" onclick="deleteSave('${attrJs(s.key)}')">Delete</button>
@@ -3847,6 +3881,232 @@ ${sec.leasingSection?`
 </div>
 </body></html>`;
 }
+// ─── VESTMINT FUND REPORT BUILDER ────────────────────────────────────────────
+function buildVestmintReport(m,n,invName,quarter,sections){
+  const sec={fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true,...(sections||{})};
+  const _pf=state.vestmintHasProForma!==false;
+  const inv=escapeHtml(invName||"VestMint Fund");
+  const qtr=escapeHtml(quarter||"");
+  const prev=state.invPrevMetrics;
+  const pg={n:1,v(){return ++this.n;}};
+  const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(1)+"%":"—";
+  const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
+  const C=(k,t)=>{const s=state.invCharts[k];return`<div class="cb"><div class="ct">${t}${_pf?' · vs. Pro Forma':''}</div>${s?`<img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/>`:`<div class="np">Chart not uploaded</div>`}</div>`;};
+  // Property photos for cover
+  const propPhotos=state.invProperties.filter(p=>p.name).map(p=>({name:p.name,photo:loadPhotoForProperty(p.name)})).filter(p=>p.photo);
+  const n_photos=propPhotos.length;
+  const thumbW=190,thumbH=Math.round(thumbW*0.65);
+  const photoThumb=p=>`<div style="text-align:center;flex-shrink:0">
+    ${p.photo?`<img src="${p.photo}" style="width:${thumbW}px;height:${thumbH}px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,196,140,0.4);display:block"/>`:
+    `<div style="width:${thumbW}px;height:${thumbH}px;border-radius:8px;border:2px solid rgba(0,196,140,0.4);background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;color:rgba(255,255,255,0.35);font-family:sans-serif;letter-spacing:1px;text-transform:uppercase">No Image</span></div>`}
+    <div style="font-size:9px;color:rgba(255,255,255,0.55);margin-top:6px;font-family:sans-serif;letter-spacing:1.5px;text-transform:uppercase;width:${thumbW}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.name)}</div>
+  </div>`;
+  const photoStrip=n_photos===0?""
+    :`<div style="margin-top:36px;display:grid;grid-template-columns:repeat(${n_photos<=2?n_photos:n_photos===4?2:3},${thumbW}px);gap:16px;justify-content:center;max-width:660px">
+        ${propPhotos.map(photoThumb).join("")}
+      </div>`;
+  const propNamesHtml=state.invProperties.filter(p=>p.name).map(p=>`<span style="white-space:nowrap">${escapeHtml(p.name)}</span>`).join(" · ");
+
+  const css=`
+:root{--dark:#1a3a35;--teal:#00c48c;--teal-mid:#2e7d6e;--teal-light:#e6f9f4;--cream:#ffffff;--text:#1a3a35;--muted:#5a8070;--border:#c8e6de;}
+*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Georgia,serif;background:var(--cream);color:var(--text);}
+.page{width:816px;min-height:1056px;background:white;margin:20px auto;padding:48px 52px 70px;box-shadow:0 4px 20px rgba(26,58,53,.12);position:relative;page-break-after:always;break-after:page;border-left:6px solid var(--teal);}
+.cover{background:var(--dark);border-left:none;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:80px 60px;}
+.cover .eyebrow{color:rgba(255,255,255,0.55);font-size:13px;letter-spacing:4px;text-transform:uppercase;font-family:sans-serif;margin-bottom:20px;}
+.cover h1{color:white;font-size:56px;font-weight:700;margin-bottom:10px;font-family:sans-serif;}
+.cover .quarter{color:var(--teal);font-size:26px;font-weight:400;letter-spacing:3px;margin-bottom:36px;font-family:sans-serif;}
+.cover .divider{width:60px;height:3px;background:var(--teal);margin:0 auto 30px;}
+.sh{background:var(--dark);color:white;padding:10px 18px;font-family:sans-serif;font-size:11px;letter-spacing:3px;text-transform:uppercase;margin-bottom:18px;}
+.sh2{font-family:sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--teal);font-weight:700;margin:18px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px;}
+.pn{font-family:sans-serif;font-size:11px;color:var(--teal);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;}
+.st{width:100%;border-collapse:collapse;margin-bottom:22px;font-family:sans-serif;font-size:13px;}
+.st th{background:var(--dark);color:white;padding:9px 14px;text-align:left;font-weight:500;letter-spacing:1px;font-size:11px;}
+.st td{padding:9px 14px;border-bottom:1px solid var(--border);}
+.st tr:nth-child(even) td{background:var(--teal-light);}
+.pos{color:#c0392b;font-weight:600;}.neg{color:#1a8a6e;font-weight:600;}
+.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px;}
+.sc{border:1px solid var(--border);border-radius:8px;padding:12px 14px;text-align:center;}
+.sc .sl{font-family:sans-serif;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;}
+.sc .sv{font-family:sans-serif;font-size:20px;font-weight:700;color:var(--dark);}
+.sc.hl{background:var(--dark);border-color:var(--dark);}.sc.hl .sl{color:var(--teal);}.sc.hl .sv{color:white;}
+.cg{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;}
+.cb{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--teal-light);}
+.ct{font-family:sans-serif;font-size:9px;color:var(--dark);text-transform:uppercase;letter-spacing:1px;font-weight:700;padding:7px 11px;background:white;border-bottom:1px solid var(--border);}
+.cb .np{height:145px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:sans-serif;font-size:12px;}
+.cb img{width:100%;height:auto;display:block;}
+.lg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px;}
+.lc{background:var(--teal-light);border-radius:8px;padding:11px 12px;text-align:center;font-family:sans-serif;}
+.ll{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;}
+.lv{font-size:18px;font-weight:700;color:var(--dark);}
+.ns{margin-bottom:0;padding:13px 0;border-bottom:1px solid var(--border);}.ns:last-of-type{border-bottom:none;}
+.nl{font-family:sans-serif;font-size:10px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;}
+.nt{font-size:13px;line-height:1.75;}
+.fn{font-family:sans-serif;font-size:10px;color:var(--muted);line-height:1.9;border-top:1px solid var(--border);padding-top:14px;}
+.pgn{position:absolute;bottom:24px;right:52px;font-family:sans-serif;font-size:10px;color:var(--muted);}
+.footer-logo{position:absolute;bottom:12px;right:100px;height:48px;width:auto;opacity:0.75;}
+.footer-prop{position:absolute;bottom:28px;left:52px;font-family:sans-serif;font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;}
+.fs-img{width:100%;height:auto;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:12px;}
+@media print{@page{margin:0;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{background:white;}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page;}.page:last-child{page-break-after:auto;}img{box-shadow:none;}}`;
+
+  // Fund overview text → convert line-breaks + bullet chars to HTML
+  const fmtOverview=(raw)=>{
+    if(!raw) return "";
+    return escapeHtml(raw).replace(/\n/g,"<br>");
+  };
+
+  const prevQtrLabel=calcPrevQuarterLabel(qtr)||"Prior Quarter";
+  const qoqTbl=`<table class="st"><thead><tr><th>Metric</th><th>${prevQtrLabel}</th><th>${qtr}</th><th>Change</th></tr></thead><tbody>
+    <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td><td class="${prev&&m.totalIncome>=prev.totalIncome?"neg":"pos"}">${fmtChg(m.totalIncome,prev?.totalIncome??null)}</td></tr>
+    <tr><td>Total Expenses</td><td>${prev?fmtWhole(prev.totalExpense):"—"}</td><td>${fmtWhole(m.totalExpense)}</td><td class="${prev&&m.totalExpense<=prev.totalExpense?"neg":"pos"}">${fmtChg(m.totalExpense,prev?.totalExpense??null)}</td></tr>
+    <tr><td>Net Operating Income</td><td>${prev?fmtWhole(prev.noi):"—"}</td><td>${fmtWhole(m.noi)}</td><td class="${prev&&m.noi>=prev.noi?"neg":"pos"}">${fmtChg(m.noi,prev?.noi??null)}</td></tr>
+    <tr><td>Avg Physical Occupancy</td><td>${prev?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td><td class="${prev&&m.occupancy>=prev.occupancy?"neg":"pos"}">${fmtOccChg(m.occupancy,prev?.occupancy??null)}</td></tr>
+    <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td><td class="${prev&&m.delinquency<=prev.delinquency?"neg":"pos"}">${prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—"}</td></tr>
+  </tbody></table>`;
+
+  // Summary overflow check
+  const summaryTextLen=(n.income||"").length+(n.expenses||"").length+(n.capex||"").length+(n.outlook||"").length;
+  const summaryOverflow=summaryTextLen>1200||(n.outlook||"").length>500;
+
+  // Financial statement images
+  const finPages=(state.vestmintFinancials||[]);
+  // Other assets
+  const otherAssets=(state.vestmintOtherAssets||[]).filter(a=>a.name||a.narrative);
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>${inv} ${qtr} Investor Report</title><style>${css}</style></head><body>
+<!-- PAGE 1: COVER -->
+<div class="page cover">
+  <img src="${LOGO_FULL}" alt="LeavenWealth" style="height:60px;width:auto;margin-bottom:28px;filter:brightness(0) invert(1);"/>
+  <div class="eyebrow">Investor Report</div>
+  <div class="quarter">${qtr.replace(/Q(\d)/i,"Q$1").replace(/\s*(\d{4})/," · $1")}</div>
+  <div class="divider"></div>
+  <h1>${inv}</h1>
+  ${n_photos>0?photoStrip:`<div style="margin-top:20px;font-family:sans-serif;font-size:11px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;">${propNamesHtml}</div>`}
+  ${n_photos>0?`<div style="margin-top:16px;font-family:sans-serif;font-size:10px;color:rgba(255,255,255,0.35);letter-spacing:2px;text-transform:uppercase;">${propNamesHtml}</div>`:""}
+</div>
+<!-- PAGE 2: SUMMARY — fund overview + QoQ + narratives -->
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Summary — ${qtr}</div>
+  ${sec.fundOverview&&state.vestmintFundOverview?`<div style="background:var(--teal-light);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:18px;font-family:sans-serif;font-size:13px;line-height:1.75;">${fmtOverview(state.vestmintFundOverview)}</div>`:""}
+  ${qoqTbl}
+  <div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income||"").replace(/\n/g,"<br>")}</p></div>
+  <div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses||"").replace(/\n/g,"<br>")}</p></div>
+  ${n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,"<br>")}</p></div>`:""}
+  ${!summaryOverflow&&n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,"<br>")}</p></div>`:""}
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>
+${summaryOverflow&&n.outlook?`<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Summary — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
+  <div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,"<br>")}</p></div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`:""}
+<!-- PAGE 3: PORTFOLIO SNAPSHOT -->
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Portfolio Snapshot — ${qtr}</div>
+  <div class="sg">
+    <div class="sc hl"><div class="sl">Total Income</div><div class="sv">${fmtWhole(m.totalIncome)}</div></div>
+    <div class="sc hl"><div class="sl">Total Expenses</div><div class="sv">${fmtWhole(m.totalExpense)}</div></div>
+    <div class="sc hl"><div class="sl">Net Operating Income</div><div class="sv">${fmtWhole(m.noi)}</div></div>
+    <div class="sc"><div class="sl">Avg Physical Occupancy (Weighted)</div><div class="sv">${m.occupancy}%</div></div>
+    <div class="sc"><div class="sl">Avg Economic Occupancy (Weighted)</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
+    <div class="sc"><div class="sl">Total Units</div><div class="sv">${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</div></div>
+  </div>
+  <div class="sg" style="margin-top:4px;">
+    <div class="sc"><div class="sl">Total Delinquency</div><div class="sv">${fmtWhole(m.delinquency)}</div></div>
+    <div class="sc"><div class="sl">Loss to Lease (Weighted)</div><div class="sv">${fmtWhole(m.lossToLease)}</div></div>
+    <div class="sc"><div class="sl">Avg Economic Occupancy</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
+  </div>
+  ${m.propertyMetrics&&m.propertyMetrics.length>0?`
+  <div class="sh2">By Property</div>
+  <table class="st"><thead><tr><th>Property</th><th>Units</th><th>Occupancy</th><th>Income</th><th>Expenses</th><th>NOI</th></tr></thead><tbody>
+    ${m.propertyMetrics.map(p=>`<tr><td>${escapeHtml(p.name||"—")}</td><td>${p.unitCount||"—"}</td><td>${p.occupancy}%</td><td>${fmtWhole(p.totalIncome)}</td><td>${fmtWhole(p.totalExpense)}</td><td>${fmtWhole(p.noi)}</td></tr>`).join("")}
+  </tbody></table>`:""}
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>
+<!-- FINANCIAL CHARTS -->
+${sec.financialCharts?`
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Financial Charts — ${qtr}</div>
+  <div class="cg">
+    ${C("inv_operating_income","Operating Income")}
+    ${C("inv_operating_expense","Operating Expense")}
+  </div>
+  <div class="cg">
+    ${C("inv_income_vs_expense","Operating Income vs. Operating Expense")}
+    ${C("inv_noi","Net Operating Income")}
+  </div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Financial Charts — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
+  <div class="cg">
+    ${C("inv_income_by_property","Income by Property")}
+    ${C("inv_expense_by_property","Expense by Property")}
+  </div>
+  <div class="cg">
+    ${C("inv_noi_by_property","NOI by Property")}
+    ${C("inv_utility","Utility Income vs. Expense")}
+  </div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`:""}
+<!-- LEASING -->
+${sec.leasingSection?`
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Leasing — ${qtr}</div>
+  <div class="lg">
+    <div class="lc"><div class="ll">Avg Physical Occupancy (Weighted)</div><div class="lv">${m.occupancy}%</div></div>
+    <div class="lc"><div class="ll">Avg Economic Occupancy</div><div class="lv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
+    <div class="lc"><div class="ll">Total Delinquency</div><div class="lv">${fmtWhole(m.delinquency)}</div></div>
+    <div class="lc"><div class="ll">Loss to Lease (Weighted)</div><div class="lv">${fmtWhole(m.lossToLease)}</div></div>
+    <div class="lc"><div class="ll">New Leases</div><div class="lv">${m.newLeases}</div></div>
+    <div class="lc"><div class="ll">Lease Renewals</div><div class="lv">${m.renewals}</div></div>
+    <div class="lc"><div class="ll">Prospect Inquiries</div><div class="lv">${m.inquiries}</div></div>
+    <div class="lc"><div class="ll">Prospect Applications</div><div class="lv">${m.applications}</div></div>
+    <div class="lc"><div class="ll">—</div><div class="lv">&nbsp;</div></div>
+  </div>
+  <div class="cg">
+    ${C("inv_occupancy_rate","Occupancy Rate")}
+    ${C("inv_occupancy_by_property","Occupancy Rate By Property")}
+  </div>
+  <div class="cg">
+    ${C("inv_lease_expirations","Lease Expirations by Month")}
+    ${C("inv_rent_growth","Rent Growth & Market Rent")}
+  </div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`:""}
+<!-- UNAUDITED FINANCIAL STATEMENTS (embedded PDF pages) -->
+${sec.financialStatements&&finPages.length>0?(()=>{
+  // Group into pages of up to 1 image each (each PDF page gets its own report page)
+  return finPages.map((imgSrc,i)=>`<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Unaudited Financial Statements — ${qtr}${finPages.length>1?` <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(${i+1} of ${finPages.length})</span>`:""}</div>
+  <img src="${imgSrc}" class="fs-img" alt="Financial Statement page ${i+1}"/>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`).join("\n");
+})():""}
+<!-- OTHER ASSET SECTIONS -->
+${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
+  const aName=escapeHtml(a.name||"Additional Investment");
+  const aText=escapeHtml(a.narrative||"").replace(/\n/g,"<br>");
+  return `<div class="page">
+  <div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div>
+  <div class="ns"><p class="nt">${aText}</p></div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`;
+}).join("\n"):""}
+<!-- LAST PAGE: FOOTNOTES -->
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Footnotes</div>
+  <div class="fn">
+    <p>*** Economic Occupancy is calculated as follows: Total Quarterly Income / Total Quarterly Income Expected (assuming full rent)</p><br>
+    <p>*** Loss to Lease is calculated as follows: (Gross Potential Rent – Market Rent of Vacant Units) – Actual Current Rent</p><br>
+    <p>*** Cash on Hand is the bank balance prior to any distributions for the current quarter</p><br>
+    <p>*** Financial Reports are unaudited cash basis reports provided by the property management company for the asset</p><br>
+    <p>*** Financials are not considered final until calendar year is complete +45 days. Variances found after quarterly report publication will be vetted and material variances will be disclosed on the following quarterly report</p>
+  </div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>
+</body></html>`;
+}
 function invFileRow(propId,key,label,hint,isExcel){
   const prop=state.invProperties.find(p=>p.id===propId);
   const done=!!(prop&&prop.files[key]);
@@ -3975,11 +4235,11 @@ function renderInvestmentStep0(){
     </div>`;
   };
   el.innerHTML=`
-    <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Investment Report Setup</h2>
-    <p style="font-size:13px;color:#5a8070;margin-bottom:16px">Name the investment, add each property, and upload their data files.</p>
+    <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">${state.source==='vestmint'?'VestMint Fund Report Setup':'Investment Report Setup'}</h2>
+    <p style="font-size:13px;color:#5a8070;margin-bottom:16px">${state.source==='vestmint'?'Name the fund, add each property (Brent Village, Greenway 1, Greenway 2), and upload their data files.':'Name the investment, add each property, and upload their data files.'}</p>
     <div class="econ-box" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-      <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Investment Name</label>
-        <input type="text" placeholder="e.g. MWP 4" value="${escapeHtml(state.investmentName)}"
+      <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">${state.source==='vestmint'?'Fund Name':'Investment Name'}</label>
+        <input type="text" placeholder="${state.source==='vestmint'?'e.g. VestMint Fund':'e.g. MWP 4'}" value="${escapeHtml(state.investmentName)}"
           oninput="state.investmentName=this.value;var _s=document.getElementById('mwp5-suppincome');if(_s)_s.style.display=/mwp\s*5/i.test(this.value)?'block':'none';var _b=document.getElementById('bgchampion-custom');if(_b)_b.style.display=/bg\s*champion/i.test(this.value)?'block':'none'"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Quarter</label>
@@ -4631,6 +4891,143 @@ function generateReport() {
     } catch(e){ showError("Error: "+e.message); state.generating=false; render(); }
   },100);
 }
+// ─── VESTMINT FUND — STEP 2 UI ───────────────────────────────────────────────
+function renderVestmintStep2(){
+  const el=document.getElementById("step-content");
+  const chartsN=Object.values(state.invCharts).filter(Boolean).length;
+  const finPages=state.vestmintFinancials||[];
+  const otherAssets=state.vestmintOtherAssets||[];
+  el.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:4px">VestMint Fund — Narratives &amp; Report Setup</h2>
+        <p style="font-size:13px;color:#9ca3af;margin:0">Review auto-generated narratives and upload supplemental content.</p>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;margin-left:12px">
+        <button style="font-size:11px;font-weight:600;color:white;background:#1a3a35;border:1px solid #1a3a35;border-radius:5px;padding:5px 11px;cursor:${state.rewritingClaude?'not-allowed':'pointer'};white-space:nowrap;font-family:Inter,sans-serif;opacity:${state.rewritingClaude?'0.7':'1'}" onclick="rewriteWithClaude('investment')" ${state.rewritingClaude?'disabled':''} title="Rewrite the narratives with Claude">${state.rewritingClaude?'✨ Writing...':'✨ Rewrite with Claude'}</button>
+        <button style="font-size:11px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1px solid #c8e6de;border-radius:5px;padding:5px 11px;cursor:pointer;white-space:nowrap;font-family:Inter,sans-serif" onclick="if(confirm('Overwrite current narratives with freshly generated text?')){state.invNarratives=genInvestmentNarratives(state.invMetrics);render()}" title="Re-run template narrative generator">↺ Template</button>
+      </div>
+    </div>
+
+    ${[["income","Income &amp; Occupancy"],["expenses","Expenses"],["capex","Capital Expenditures"],["outlook","Outlook"]].map(([k,l])=>`
+      <div><span class="narrative-label">${l}<span class="auto-badge">AUTO</span></span>
+      <textarea id="vm-narr-${k}" oninput="state.invNarratives['${k}']=this.value;state.invNarrativesEdited=true">${escapeHtml(state.invNarratives[k])}</textarea></div>`).join("")}
+
+    <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
+      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:8px;letter-spacing:.5px;text-transform:uppercase">Fund Overview</div>
+      <p style="font-size:12px;color:#5a8070;margin:0 0 8px">Optional — appears on the Summary page above the financials table.</p>
+      <textarea id="vm-fund-overview" rows="5" style="width:100%;padding:10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;resize:vertical;box-sizing:border-box" oninput="state.vestmintFundOverview=this.value">${escapeHtml(state.vestmintFundOverview||"")}</textarea>
+    </div>
+
+    <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
+      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase">📊 Chart Uploads</div>
+      <div class="charts-info" style="margin-bottom:10px">📊 <strong>${chartsN}/12 charts uploaded</strong> — ${chartsN===12?"All charts ready!":"Missing charts will show placeholders in the report."}</div>
+      <p style="font-size:12px;color:#5a8070;margin:0 0 10px">Same charts as an Investment Report — 12 slots across financial trends and leasing.</p>
+      <div id="vm-charts-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+        ${(()=>{
+          const INV_CHART_SLOTS=[
+            {key:"inv_income_trend",label:"Income Trend"},
+            {key:"inv_expense_trend",label:"Expense Trend"},
+            {key:"inv_noi_trend",label:"NOI Trend"},
+            {key:"inv_cashflow_trend",label:"Cash Flow Trend"},
+            {key:"inv_income_breakdown",label:"Income Breakdown"},
+            {key:"inv_expense_breakdown",label:"Expense Breakdown"},
+            {key:"inv_occupancy_trend",label:"Occupancy Trend"},
+            {key:"inv_delinquency_trend",label:"Delinquency Trend"},
+            {key:"inv_new_leases",label:"New Leases"},
+            {key:"inv_renewals",label:"Renewals"},
+            {key:"inv_applications",label:"Applications"},
+            {key:"inv_inquiries",label:"Inquiries"},
+          ];
+          return INV_CHART_SLOTS.map(({key,label})=>{
+            const has=!!state.invCharts[key];
+            return`<div style="border:1px solid ${has?"#22c55e":"#c8e6de"};border-radius:8px;padding:10px;background:${has?"#f0fdf4":"white"};text-align:center">
+              <div style="font-size:11px;font-weight:600;color:#1a3a35;margin-bottom:8px">${label}</div>
+              ${has?`<img src="${state.invCharts[key]}" style="width:100%;height:80px;object-fit:cover;border-radius:4px;margin-bottom:6px"/>`:`<div style="width:100%;height:80px;background:#f3f4f6;border-radius:4px;margin-bottom:6px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:11px">No chart</div>`}
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button onclick="loadInvChart('${key}')" style="font-size:10px;padding:3px 8px;border:1px solid #c8e6de;border-radius:4px;background:white;color:#1a3a35;cursor:pointer">${has?"Replace":"Upload"}</button>
+                ${has?`<button onclick="clearInvChart('${key}')" style="font-size:10px;padding:3px 8px;border:1px solid #fca5a5;border-radius:4px;background:white;color:#dc2626;cursor:pointer">✕</button>`:""}
+              </div>
+            </div>`;
+          }).join("");
+        })()}
+      </div>
+    </div>
+
+    <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
+      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase">📄 Financial Statements PDF</div>
+      <p style="font-size:12px;color:#5a8070;margin:0 0 10px">Upload a PDF — each page will be embedded as a full-page image in the report.</p>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <button onclick="loadVestmintFinancialsPDF()" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer">📄 ${finPages.length>0?"Replace PDF":"Upload PDF"}</button>
+        ${finPages.length>0?`<button onclick="state.vestmintFinancials=[];saveVestmintFinancialsForKey(currentSaveKey(),[]);render()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer">✕ Remove</button>`:""}
+        <span style="font-size:12px;color:${finPages.length>0?"#16a34a":"#9ca3af"};font-weight:600">${finPages.length>0?`✓ ${finPages.length} page${finPages.length===1?"":"s"} loaded`:"No PDF uploaded"}</span>
+      </div>
+      ${finPages.length>0?`<div style="display:flex;gap:8px;flex-wrap:wrap">${finPages.map((src,i)=>`<div style="border:1px solid #c8e6de;border-radius:6px;overflow:hidden;width:120px"><img src="${src}" style="width:100%;height:160px;object-fit:cover;display:block"/><div style="font-size:10px;text-align:center;padding:4px;color:#5a8070;background:#f9fafb">Page ${i+1}</div></div>`).join("")}</div>`:""}
+    </div>
+
+    <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase">🏦 Other Assets</div>
+          <p style="font-size:12px;color:#5a8070;margin:4px 0 0">Add entries for investments outside the fund's core portfolio (e.g. Real Freedom Fund LLC).</p>
+        </div>
+        <button onclick="(function(){var id=Date.now();state.vestmintOtherAssets.push({id:id,name:'',narrative:''});render();})()" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">+ Add Asset</button>
+      </div>
+      ${otherAssets.length===0?`<div style="font-size:12px;color:#9ca3af;font-style:italic;padding:8px 0">No other assets added yet.</div>`
+      :otherAssets.map((a,i)=>`
+        <div style="border:1px solid #c8e6de;border-radius:8px;padding:12px;margin-bottom:10px;background:white">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <input type="text" placeholder="Asset name (e.g. Real Freedom Fund LLC)" value="${escapeHtml(a.name||"")}"
+              oninput="(function(v){var a=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(a)a.name=v;})(this.value)"
+              style="flex:1;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
+            <button onclick="(function(){state.vestmintOtherAssets=state.vestmintOtherAssets.filter(function(x){return x.id!==${a.id};});render();})()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer">✕</button>
+          </div>
+          <textarea rows="4" placeholder="Narrative / description for this asset..."
+            style="width:100%;padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;resize:vertical;box-sizing:border-box"
+            oninput="(function(v){var a=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(a)a.narrative=v;})(this.value)">${escapeHtml(a.narrative||"")}</textarea>
+        </div>`).join("")}
+    </div>
+
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:10px;letter-spacing:.5px;text-transform:uppercase">Report Sections</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${[
+          ["fundOverview","Fund Overview","Fund overview narrative on the summary page"],
+          ["financialCharts","Financial Charts","4 pages of financial chart slides"],
+          ["leasingSection","Leasing Section","Leasing stats + occupancy chart slides"],
+          ["financialStatements","Financial Statements","Embedded fund financial statement pages"],
+          ["otherAssets","Other Assets","One page per other-asset entry"]
+        ].map(([key,label,hint])=>`<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:white;border:1px solid ${state.vestmintSections[key]?"#22c55e":"#e5e7eb"};border-radius:8px;cursor:pointer;transition:border-color .15s">
+          <input type="checkbox" ${state.vestmintSections[key]?"checked":""} onchange="state.vestmintSections['${key}']=this.checked;render()" style="margin-top:2px;accent-color:#1a3a35;width:15px;height:15px;flex-shrink:0"/>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:#1a3a35">${label}</div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:1px">${hint}</div>
+          </div>
+        </label>`).join("")}
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-back" onclick="state.step=1;render()">← Back</button>
+      <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+      <button class="gen-btn btn-next" style="flex:2" onclick="confirmAndGenerateVestmint()">🖨️ Generate VestMint Fund Report</button>
+    </div>`;
+}
+// ─── VESTMINT PDF LOADER ─────────────────────────────────────────────────────
+function loadVestmintFinancialsPDF(){
+  const inp=document.createElement("input"); inp.type="file"; inp.accept=".pdf";
+  inp.onchange=async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    try{
+      const buf=await f.arrayBuffer();
+      const pages=await renderPdfToDataURLs(buf);
+      state.vestmintFinancials=pages;
+      saveVestmintFinancialsForKey(currentSaveKey(),pages);
+      render();
+    }catch(err){showError("Could not render PDF: "+err.message);}
+  };
+  inp.click();
+}
 function generateInvestmentReport(){
   if(state.generating) return;
   if(!state.invMetrics){showError("Process investment data first before generating the report.");return;}
@@ -4684,6 +5081,37 @@ function _refreshReportHTML(){
 function _refreshInvReportHTML(){
   if(!state.invReportHTML || !state.invMetrics) return;
   state.invReportHTML = buildInvestmentReport(state.invMetrics, state.invNarratives, state.investmentName, state.currentQuarter, state.invLoan, state.invSections);
+}
+function generateVestmintReport(){
+  if(state.generating) return;
+  if(!state.invMetrics){showError("Process investment data first before generating the report.");return;}
+  state.generating=true; render();
+  setTimeout(()=>{
+    try{
+      state.vmReportHTML=buildVestmintReport(state.invMetrics,state.invNarratives,state.investmentName,state.currentQuarter,state.vestmintSections);
+      state.generating=false; render();
+    }catch(e){ showError("Error building report: "+e.message); state.generating=false; render(); }
+  },100);
+}
+function _refreshVestmintReportHTML(){
+  if(!state.vmReportHTML || !state.invMetrics) return;
+  state.vmReportHTML = buildVestmintReport(state.invMetrics, state.invNarratives, state.investmentName, state.currentQuarter, state.vestmintSections);
+}
+// Render each page of a PDF ArrayBuffer to JPEG data URLs via PDF.js
+async function renderPdfToDataURLs(arrayBuffer){
+  if(!window.pdfjsLib) throw new Error("PDF.js not loaded");
+  pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  const pages=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i);
+    const vp=page.getViewport({scale:2.0});
+    const canvas=document.createElement("canvas");
+    canvas.width=vp.width; canvas.height=vp.height;
+    await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+    pages.push(canvas.toDataURL("image/jpeg",0.92));
+  }
+  return pages;
 }
 
 function loadChart(key){
@@ -4811,7 +5239,7 @@ function loadAllBuildiumFiles(){
       // specific match wins when the filename contains both "leasing" and "data".
       if(has(base,"leasing agent","leasing report","activity by lease","leasing"))
         {assigned.leasing={file:f,asBuffer:'text'};return;}
-      if(has(base,"delinquent","delinquency"))
+      if(has(base,"delinquent","delinquency","deliquent","deliquency"))
         {assigned.delinquency={file:f,asBuffer:'text'};return;}
       unmatched.push(f.name);
     });
@@ -4885,7 +5313,7 @@ function loadAllAFFiles(){
         {assigned.leasingSummary={file:f,asBuffer:'text'};return;}
       if(has(base,"renewal summary","renewal notice"))
         {assigned.renewalSummary={file:f,asBuffer:'text'};return;}
-      if(has(base,"delinquency","delinquent"))
+      if(has(base,"delinquency","delinquent","deliquency","deliquent"))
         {assigned.delinquency={file:f,asBuffer:'text'};return;}
       if(has(base,"capital expense","capex","transaction detail","capital expenditure","general ledger"))
         {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
@@ -6116,6 +6544,104 @@ function render(){
     }
     return;
   }
+  // ── VestMint Fund mode routing ──
+  if(state.source==='vestmint'){
+    const hl=document.getElementById("home-link");
+    if(hl) hl.innerHTML=`<span class="all-reports-link" onclick="state.source=null;state.step=0;render()">← Back to Source Selection</span>`;
+    const si=document.getElementById("steps-indicator");
+    const VM_STEPS=["Setup & Upload","Review Metrics","Generate Report"];
+    si.innerHTML=VM_STEPS.map((s,i)=>`<div class="step"><div class="step-circle ${i<state.step?"done":i===state.step?"active":""}">${i<state.step?"✓":i+1}</div><div class="step-label ${i===state.step?"active":""}">${s}</div></div>`).join("");
+    document.getElementById("error-box").style.display="none";
+    if(state.step===0){renderInvestmentStep0();return;}
+    if(state.step===1 && !state.invMetrics){
+      const el=document.getElementById("step-content");
+      el.innerHTML=`<div style="text-align:center;padding:32px 0;color:#5a8070"><p style="margin-bottom:16px">No processed metrics found — please go back and process your property data first.</p><button class="btn-back" onclick="state.step=0;render()">← Back to Setup</button></div>`;
+      return;
+    }
+    if(state.step===1 && state.invMetrics){
+      const m=state.invMetrics;
+      const el=document.getElementById("step-content");
+      el.innerHTML=`
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:14px">Review Fund Metrics</h2>
+        <div class="metric-box">
+          <div class="metric-box-title">Portfolio Snapshot — ${state.currentQuarter||""}</div>
+          <table>
+            <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td>Properties</td><td><strong>${m.propertyCount}</strong></td></tr>
+              <tr><td>Total Units</td><td><strong>${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</strong></td></tr>
+              <tr><td>Weighted Avg Occupancy</td><td><strong>${m.occupancy}%</strong></td></tr>
+              <tr><td>Total Income</td><td><strong>${fmt(m.totalIncome)}</strong></td></tr>
+              <tr><td>Total Expenses</td><td><strong>${fmt(m.totalExpense)}</strong></td></tr>
+              <tr><td>Net Operating Income</td><td><strong>${fmt(m.noi)}</strong></td></tr>
+              <tr><td>Total Delinquency</td><td><strong>${fmt(m.delinquency)}</strong></td></tr>
+              <tr><td>Loss to Lease</td><td><strong>${fmt(m.lossToLease)}</strong></td></tr>
+              <tr><td>Avg Economic Occupancy</td><td><strong>${m.avgEconOcc?m.avgEconOcc+"%":"—"}</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="metric-box">
+          <div class="metric-box-title">Leasing Summary</div>
+          <div class="kpi-grid">
+            ${[["New Leases",m.newLeases],["Renewals",m.renewals],["Inquiries",m.inquiries],["Applications",m.applications]].map(([l,v])=>`<div class="kpi-card"><div class="kpi-label">${l}</div><div class="kpi-value">${v}</div></div>`).join("")}
+          </div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-box-title">By Property</div>
+          <table>
+            <thead><tr><th>Property</th><th>Units</th><th>Occupancy</th><th>Income</th><th>Expenses</th><th>NOI</th></tr></thead>
+            <tbody>
+              ${m.propertyMetrics.map(p=>`<tr><td>${escapeHtml(p.name||"—")}</td><td>${p.unitCount||"—"}</td><td>${p.occupancy}%</td><td>${fmtWhole(p.totalIncome)}</td><td>${fmtWhole(p.totalExpense)}</td><td>${fmtWhole(p.noi)}</td></tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="btn-row">
+          <button class="btn-back" onclick="state.step=0;render()">← Back</button>
+          <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+          <button class="btn-next" onclick="confirmAndAdvance(2)">Looks Good → Review Narratives</button>
+        </div>`;
+      return;
+    }
+    if(state.step===2 && !state.invMetrics){
+      const el=document.getElementById("step-content");
+      el.innerHTML=`<div style="text-align:center;padding:32px 0;color:#5a8070"><p style="margin-bottom:16px">No processed metrics found — please go back and process your property data first.</p><button class="btn-back" onclick="state.step=0;render()">← Back to Setup</button></div>`;
+      return;
+    }
+    if(state.step===2 && state.invMetrics && !state.vmReportHTML){
+      renderVestmintStep2(); return;
+    }
+    if(state.step===2 && state.vmReportHTML){
+      const el=document.getElementById("step-content");
+      el.innerHTML=`
+        <div class="report-ready-header">
+          <div><h2 style="font-size:16px;font-weight:600;margin:0">✅ VestMint Fund Report Ready!</h2>
+            <p style="font-size:12px;color:#9ca3af;margin:4px 0 0">Preview below — click Print to save as PDF.</p></div>
+          <div style="display:flex;gap:8px">
+            ${getSavesIndex().length>0?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+            <button class="btn-back" onclick="state.vmReportHTML=null;render()">← Edit</button>
+            <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+            <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="(function(){const fr=document.getElementById('vm-print-frame');if(fr&&fr.contentWindow){fr.contentWindow.focus();fr.contentWindow.print();}})()">🖨️ Print / Save PDF</button>
+          </div>
+        </div>
+        <div class="print-instructions"><strong>📄 To save as PDF:</strong> Click <strong>Print / Save PDF</strong> above → set Destination to <strong>Save as PDF</strong> → click Save.</div>
+        <div style="width:100%;height:820px;border:1px solid #c8e6de;border-radius:8px;overflow:hidden;">
+          <iframe id="vm-preview-frame" srcdoc="" style="width:100%;height:100%;border:none;"></iframe>
+        </div>
+        <iframe id="vm-print-frame" srcdoc="" style="position:fixed;top:-9999px;left:-9999px;width:816px;height:1056px;border:none;visibility:hidden;"></iframe>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          ${getSavesIndex().length>0?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+          <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new report? Clears all fund data.')){resetAll()}">+ Start New Report</button>
+        </div>`;
+      setTimeout(()=>{
+        const pv=document.getElementById("vm-preview-frame");
+        const pf=document.getElementById("vm-print-frame");
+        if(pv) pv.srcdoc=state.vmReportHTML;
+        if(pf) pf.srcdoc=state.vmReportHTML;
+      },50);
+      return;
+    }
+    return;
+  }
   const hl=document.getElementById("home-link");
   if(hl) hl.innerHTML=getSavesIndex().length>0?`<span class="all-reports-link" onclick="state.showHome=true;render()">← All Reports</span>`:"";
   const si=document.getElementById("steps-indicator");
@@ -6160,6 +6686,16 @@ function render(){
               </div>
             </div>
             <button class="home-resume-btn" style="background:#7c3aed;width:100%;text-align:center;margin-top:4px" onclick="event.stopPropagation();selectSource('investment')">Create Investment Report →</button>
+          </div>
+          <div class="home-card" style="flex-direction:column;align-items:flex-start;gap:10px;cursor:pointer;padding:20px 20px 16px;grid-column:span 2" onclick="selectSource('vestmint')">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:24px">🏦</span>
+              <div>
+                <div class="home-prop" style="font-size:15px">VestMint Fund Report <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:#d1fae5;color:#065f46;margin-left:6px">FUND</span></div>
+                <div class="home-meta" style="line-height:1.6;margin-top:4px">Generate a fund-level quarterly report for VestMint — combines Brent Village, Greenway 1 &amp; Greenway 2 with aggregated financials, fund overview, embedded financial statements, and other asset sections.</div>
+              </div>
+            </div>
+            <button class="home-resume-btn" style="background:#065f46;width:100%;text-align:center;margin-top:4px" onclick="event.stopPropagation();selectSource('vestmint')">Create VestMint Fund Report →</button>
           </div>
         </div>`;
       return;
