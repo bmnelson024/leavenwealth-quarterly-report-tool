@@ -7197,6 +7197,40 @@ function resetAll(){
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 let _authMode = "signin"; // "signin" | "signup"
 let _authReady = false;  // blocks authSubmit for 1.5 s to prevent password-manager auto-fire
+// Set to true only when WE call authSignOut() so the SIGNED_OUT handler knows
+// not to treat Supabase-initiated sign-outs (e.g. expired token) as explicit
+// logouts — those should just show the login screen, not reload the page.
+let _signingOut = false;
+// Prevents concurrent _bootAfterAuth runs (e.g. from the IIFE getSession() path
+// and the onAuthStateChange fallback firing at the same time).
+let _bootAfterAuthInFlight = false;
+// Central wrapper: runs _bootAfterAuth once at a time. All call sites use this
+// instead of calling _bootAfterAuth directly so we never get two simultaneous
+// attempts to hide the overlay and render the app.
+async function _ensureBootedAfterAuth(user){
+  if(_bootAfterAuthInFlight){
+    console.log('[QRB] _ensureBootedAfterAuth: already in flight, skipping duplicate call');
+    return;
+  }
+  _bootAfterAuthInFlight = true;
+  try{
+    await _bootAfterAuth(user);
+  }catch(e){
+    console.warn('[QRB] _bootAfterAuth threw (should not happen — check _bootAfterAuth try/catch):', e);
+    // Last-ditch: try to hide the overlay so the user isn't permanently stuck.
+    try{
+      const overlay = document.getElementById('auth-overlay');
+      if(overlay && overlay.style.display !== 'none'){
+        overlay.style.display = 'none';
+        const appRoot = document.getElementById('app-root');
+        if(appRoot) appRoot.classList.add('ready');
+        render();
+      }
+    }catch(e2){}
+  }finally{
+    _bootAfterAuthInFlight = false;
+  }
+}
 function _authMsg(txt, kind){
   const el = document.getElementById('auth-msg');
   if(!el) return;
@@ -7233,12 +7267,12 @@ async function authSubmit(){
     if(_authMode === 'signin'){
       const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
       if(error) throw error;
-      _bootAfterAuth(data.user).catch(e=>console.warn('[QRB] _bootAfterAuth error:', e));
+      _ensureBootedAfterAuth(data.user); // fire-and-forget; errors caught inside wrapper
     } else {
       const { data, error } = await sb.auth.signUp({ email, password: pw });
       if(error) throw error;
       if(data.user && data.session){
-        _bootAfterAuth(data.user).catch(e=>console.warn('[QRB] _bootAfterAuth error:', e));
+        _ensureBootedAfterAuth(data.user); // fire-and-forget; errors caught inside wrapper
       } else {
         // Flip back to sign-in mode (toggle-aware) so every label stays consistent,
         // then restore the "Account created" message which authToggleMode clears.
@@ -7265,6 +7299,7 @@ async function authForgotPassword(){
   }
 }
 async function authSignOut(){
+  _signingOut = true; // tell the SIGNED_OUT handler this is intentional
   try{ await sb.auth.signOut(); }catch(e){ console.warn('signOut failed:',e); }
   // Belt-and-suspenders: empty the autosave dedup cache so if a different
   // user signs in on this browser before the reload completes, their
@@ -7394,43 +7429,78 @@ async function _bootAfterAuth(user){
   window.addEventListener('beforeunload', flushAutoSaveOnUnload);
 })();
 // Check for an existing session and auto-sign-in, or leave the login screen up.
+// Note: onAuthStateChange also fires INITIAL_SESSION concurrently and acts as a
+// fallback — whichever path reaches _ensureBootedAfterAuth first wins; the other
+// is a no-op thanks to the _bootAfterAuthInFlight guard.
 (async function bootstrap(){
   try{
     const { data: { session } } = await sb.auth.getSession();
+    console.log('[QRB] bootstrap(): getSession returned', session ? 'session for '+session.user?.email : 'null');
     if(session && session.user){
-      await _bootAfterAuth(session.user);
+      await _ensureBootedAfterAuth(session.user);
     }
   }catch(e){
-    console.warn('Session check failed:',e);
+    console.warn('[QRB] bootstrap(): Session check failed:',e);
     _authMsg('Could not contact Supabase. Check your internet connection and reload.', 'error');
   }
 })();
 // React to auth state changes (sign-in, sign-out, token refresh, initial session).
-// This is our most reliable hook for ensuring the cache is populated — it fires
-// for every token event regardless of how the user authenticated.
-const _AUTH_RELOAD_EVENTS = new Set(['SIGNED_IN','TOKEN_REFRESHED','INITIAL_SESSION']);
+// Strategy:
+//   SIGNED_OUT  — only reload if WE initiated it (_signingOut flag). Otherwise
+//                 a Supabase-initiated sign-out (expired token) during or just
+//                 before a manual sign-in would wipe the in-flight login. Instead
+//                 we clear in-memory state and show the login screen gracefully.
+//   SIGNED_IN / INITIAL_SESSION — if the overlay is still visible (user hasn't
+//                 been booted in yet), use _ensureBootedAfterAuth as a fallback.
+//                 This handles the case where getSession() returns null but
+//                 onAuthStateChange has a valid session, or where authSubmit's
+//                 fire-and-forget failed silently.
+//   TOKEN_REFRESHED — just refresh the data cache; overlay is already hidden.
+const _BOOT_EVENTS = new Set(['SIGNED_IN','INITIAL_SESSION','TOKEN_REFRESHED']);
 sb.auth.onAuthStateChange(async (event, session)=>{
   console.log('[QRB] onAuthStateChange:', event, session?.user?.email || '(no user)');
   if(event === 'SIGNED_OUT'){
-    window.location.reload();
+    if(_signingOut){
+      // Intentional sign-out — reload for a clean slate.
+      window.location.reload();
+    } else {
+      // Supabase-initiated (token expired / revoked). Do NOT reload — that
+      // would wipe a sign-in that may be in progress right now (e.g. the user
+      // clicked Sign In just as the old token expired). Instead, clear cache
+      // and surface the login screen so they can re-authenticate.
+      console.log('[QRB] SIGNED_OUT (external) — clearing state and showing login');
+      _currentUser = null;
+      _bootAfterAuthInFlight = false; // allow a fresh boot on next sign-in
+      for(const k of Object.keys(_dbCache)) delete _dbCache[k];
+      const overlay = document.getElementById('auth-overlay');
+      if(overlay) overlay.style.display = ''; // restore CSS default (flex)
+      const appRoot = document.getElementById('app-root');
+      if(appRoot) appRoot.classList.remove('ready');
+      const chip = document.getElementById('user-chip');
+      if(chip) chip.style.display = 'none';
+      _authMsg('Your session expired — please sign in again.', 'info');
+    }
     return;
   }
-  if(_AUTH_RELOAD_EVENTS.has(event) && session && session.user){
-    // Re-run bootstrap on any event that means we have a (possibly new) valid
-    // token. The _bootstrapInFlight guard prevents concurrent runs — if one is
-    // already in flight (e.g. from authSubmit calling _bootAfterAuth at the
-    // same time), it sets _bootstrapRetryPending=true and schedules a follow-up
-    // run with the fresh token once the current run finishes.
-    try{
-      await supaBootstrap();
-      state.showHome = getSavesIndex().length > 0;
-      // Only re-render if the app is already visible (overlay is hidden).
-      // If the user is still on the login screen, _bootAfterAuth will render.
-      const overlay = document.getElementById('auth-overlay');
-      if(!overlay || overlay.style.display === 'none'){
-        try{render();}catch(e){}
-      }
-    }catch(e){ console.warn('[QRB] Re-bootstrap after',event,'failed:',e); }
+  if(session && session.user){
+    const overlay = document.getElementById('auth-overlay');
+    // Is the auth overlay still showing? (display is '' or 'flex' — NOT 'none')
+    const overlayVisible = !overlay || overlay.style.display !== 'none';
+    if(_BOOT_EVENTS.has(event) && overlayVisible){
+      // The overlay is up — this event can serve as the login trigger.
+      // _ensureBootedAfterAuth deduplicates with the getSession() IIFE path.
+      console.log('[QRB] onAuthStateChange:', event, '— overlay visible, triggering boot');
+      _ensureBootedAfterAuth(session.user);
+    } else {
+      // Already logged in — just refresh the data cache and re-render.
+      try{
+        await supaBootstrap();
+        state.showHome = getSavesIndex().length > 0;
+        if(!overlay || overlay.style.display === 'none'){
+          try{render();}catch(e){}
+        }
+      }catch(e){ console.warn('[QRB] Re-bootstrap after',event,'failed:',e); }
+    }
   }
 });
 </script>
