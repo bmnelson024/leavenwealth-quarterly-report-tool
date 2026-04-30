@@ -287,11 +287,22 @@ function _isCacheOnlyKey(k){
 // cache-wipe/write steps and potentially leaving the cache empty.
 let _bootstrapInFlight = false;
 let _bootstrapRetryPending = false;
+// Callers that arrive while a bootstrap is in-flight push a resolve callback
+// here so they can await the real fetch completion instead of getting back
+// undefined and rendering with an empty cache.
+let _bootstrapDoneCallbacks = [];
 
 // Pull every persisted row out of Supabase into _dbCache, then derive the
 // saves index locally. Called on login / page reload after auth succeeds.
 async function supaBootstrap(){
-  if(_bootstrapInFlight){ _bootstrapRetryPending=true; return; }
+  if(_bootstrapInFlight){
+    _bootstrapRetryPending=true;
+    // Instead of returning undefined (which lets the caller proceed immediately
+    // with an empty cache), return a Promise that resolves once the in-flight
+    // bootstrap finishes. This ensures _bootAfterAuth always waits for real data
+    // before deciding whether to show the home screen.
+    return new Promise(resolve=>_bootstrapDoneCallbacks.push(resolve));
+  }
   _bootstrapInFlight=true;
   // AbortController lets us cancel a hanging fetch so the _bootstrapInFlight
   // flag is never permanently stuck and retries can proceed.
@@ -356,6 +367,11 @@ async function supaBootstrap(){
     // Always release the lock — even if the Supabase query threw — so that
     // retries and TOKEN_REFRESHED re-runs are never permanently blocked.
     _bootstrapInFlight=false;
+    // Notify any callers that were waiting for this bootstrap to finish.
+    // They pushed a resolve() into _bootstrapDoneCallbacks instead of
+    // getting undefined back; fire them now so their awaits can resume.
+    const _doneCbs = _bootstrapDoneCallbacks.splice(0);
+    for(const cb of _doneCbs) try{cb();}catch(e){}
     if(_bootstrapRetryPending){
       _bootstrapRetryPending=false;
       // A second caller arrived while we were in flight — run again now that
@@ -676,12 +692,15 @@ function rehydrateMetricsIfNeeded(){
     prevMetrics: state.prevMetrics,
     narrativesEdited: state.narrativesEdited,
   };
+  _silentRehydrate = true;
   try {
     if(src === 'buildium') processBuildium();
     else processDataAppFolio();
   } catch(e) {
     console.warn('rehydrateMetricsIfNeeded: processor threw', e);
     return false;
+  } finally {
+    _silentRehydrate = false;
   }
   state.step = snap.step;
   state.narratives = snap.narratives;
@@ -758,6 +777,8 @@ function saveProgress(options){
     vestmintOtherAssets:state.vestmintOtherAssets||[],
     vestmintSections:state.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
     vestmintHasProForma:state.vestmintHasProForma!==false,
+    narrativesEdited:!!state.narrativesEdited,
+    invNarrativesEdited:!!state.invNarrativesEdited,
     savedAt:new Date().toISOString()
   };
   try{
@@ -820,6 +841,9 @@ function _hashFileSet(filesOrProps, isInv){
 // surfaces status through the header indicator pill.
 let _autoSaveTimer = null;
 let _autoSaveArmed = false; // gated true after user interaction so bootstrap doesn't clobber saves
+// Set to true by rehydrateMetricsIfNeeded so silent background processor calls don't
+// fire render(), showToast(), or step-advance side-effects during a loadSave().
+let _silentRehydrate = false;
 function armAutoSave(){ _autoSaveArmed = true; }
 function canAutoSave(){
   if(!_autoSaveArmed) return false;
@@ -957,11 +981,10 @@ async function loadSave(key){
       // Freshly-loaded state matches what's on disk, so suppress the "save before
       // continuing?" prompt that would otherwise fire on the next advance.
       _savedThisStep:true,
-      // Derive edited-flags from content so re-processing won't clobber narratives
-      // the user wrote in a prior session. Matches the content-fallback rule in
-      // narrativesEditedFlag() for legacy saves.
-      narrativesEdited: hasNarrativeContent(data.narratives||{}),
-      invNarrativesEdited: hasNarrativeContent(data.invNarratives||{})
+      // Restore edited-flags from saved data when present (saves made after this fix).
+      // Fall back to content-based inference for legacy saves that predate the flags.
+      narrativesEdited: data.narrativesEdited != null ? !!data.narrativesEdited : hasNarrativeContent(data.narratives||{}),
+      invNarrativesEdited: data.invNarrativesEdited != null ? !!data.invNarrativesEdited : hasNarrativeContent(data.invNarratives||{})
     };
     // Backfill fields for old saves that predate them
     if(state.invMetrics && !state.invMetrics.expenseCategories) state.invMetrics.expenseCategories=[];
@@ -984,6 +1007,7 @@ function deleteSave(key){
     dbRemove(FILES_PREFIX+key);
     dbRemove(INV_FILES_PREFIX+key);
     dbRemove(VESTMINT_FINANCIALS_PREFIX+key);
+    dbRemove(BG_CHAMPION_CHARTS_PREFIX+key);
     const idx=getSavesIndex().filter(s=>s.key!==key);
     dbSet(SAVES_INDEX_KEY,JSON.stringify(idx));
     if(idx.length===0){state.showHome=false;state.step=0;state.source=null;state.metrics=null;state.invMetrics=null;}
@@ -1522,7 +1546,7 @@ function setCurrentQuarter(v){ state.currentQuarter = v; }
 function blurNormalizeQuarter(){
   const n = normalizeQuarter(state.currentQuarter);
   if(n !== state.currentQuarter){ state.currentQuarter = n; render(); }
-  else { render(); }
+  // No render needed when value is unchanged — autosave or next interaction will handle it.
 }
 // Rent Engine community-name match: avoids the bidirectional-substring trap
 // where "Park" would match rows belonging to "Park Place" and vice versa.
@@ -2675,7 +2699,7 @@ function loadInvChart(key){
   inp.onchange=e=>{
     const f=e.target.files[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{state.invCharts[key]=ev.target.result;saveInvChartsForKey(currentSaveKey(),state.invCharts);_refreshInvReportHTML();render();};
+    r.onload=ev=>{state.invCharts[key]=ev.target.result;saveInvChartsForKey(currentSaveKey(),state.invCharts);(state.source==='vestmint'?_refreshVestmintReportHTML():_refreshInvReportHTML());render();};
     r.onerror=()=>showError("Could not read \""+f.name+"\". The file may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
@@ -2697,7 +2721,7 @@ function loadAllInvCharts(){
     });
     function afterLoad(m,u){
       saveInvChartsForKey(currentSaveKey(),state.invCharts);
-      _refreshInvReportHTML();
+      (state.source==='vestmint'?_refreshVestmintReportHTML():_refreshInvReportHTML());
       render();
       const msgs=[];
       if(u.length>0) msgs.push("Could not match "+u.length+" file(s): "+u.join(", ")+".");
@@ -4672,6 +4696,7 @@ function processDataAppFolio() {
         ({ totalIncome, totalExpense, noi, capex, capexItems, incomeRows, monthCols } = parsed);
         if (!totalIncome && !totalExpense) {
           showError("Warning: Income Statement parsed but contained no totals. Verify the file is a 12-month AppFolio statement and the quarter is set correctly.");
+          clearWarning();
         }
         warnIfNoPropTax(incomeRows, state.propertyName||"");
       } else {
@@ -4818,13 +4843,13 @@ function processDataAppFolio() {
     if(!narrativesEditedFlag('single') && !hasNarrativeContent(state.narratives)){
       state.narratives = genNarratives(state.metrics);
     } else {
-      showToast("✓ Processed — your edited narratives preserved");
+      if(!_silentRehydrate) showToast("✓ Processed — your edited narratives preserved");
       // If GL capex data was just loaded and the capex narrative is still empty, auto-fill it.
       if(glCapex && glCapex.capexItems.length > 0 && !state.narratives.capex) {
         state.narratives.capex = genNarratives(state.metrics).capex;
       }
     }
-    state.step=1; state._savedThisStep=false; render();
+    if(!_silentRehydrate){ state.step=1; state._savedThisStep=false; render(); }
   } catch(e){ showError("Error: "+e.message); }
 }
 function processBuildium() {
@@ -4950,11 +4975,11 @@ function processBuildium() {
     if(!narrativesEditedFlag('single') && !hasNarrativeContent(state.narratives)){
       state.narratives=genNarratives(state.metrics);
     } else {
-      showToast("✓ Processed — your edited narratives preserved");
+      if(!_silentRehydrate) showToast("✓ Processed — your edited narratives preserved");
       // Note: glCapex (AppFolio GL parser) is not used in the Buildium path.
       // Buildium capex comes from the income statement; no narrative auto-fill needed here.
     }
-    state.step=1; state._savedThisStep=false; render();
+    if(!_silentRehydrate){ state.step=1; state._savedThisStep=false; render(); }
   } catch(e){ showError("Error: "+e.message); }
 }
 // ─── GENERATE REPORT ─────────────────────────────────────────────────────────
@@ -5010,19 +5035,20 @@ function renderVestmintStep2(){
       <p style="font-size:12px;color:#5a8070;margin:0 0 10px">Same charts as an Investment Report — 12 slots across financial trends and leasing.</p>
       <div id="vm-charts-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
         ${(()=>{
+          // Keys must match INV_CHART_MAP and buildVestmintReport's C() calls exactly.
           const INV_CHART_SLOTS=[
-            {key:"inv_income_trend",label:"Income Trend"},
-            {key:"inv_expense_trend",label:"Expense Trend"},
-            {key:"inv_noi_trend",label:"NOI Trend"},
-            {key:"inv_cashflow_trend",label:"Cash Flow Trend"},
-            {key:"inv_income_breakdown",label:"Income Breakdown"},
-            {key:"inv_expense_breakdown",label:"Expense Breakdown"},
-            {key:"inv_occupancy_trend",label:"Occupancy Trend"},
-            {key:"inv_delinquency_trend",label:"Delinquency Trend"},
-            {key:"inv_new_leases",label:"New Leases"},
-            {key:"inv_renewals",label:"Renewals"},
-            {key:"inv_applications",label:"Applications"},
-            {key:"inv_inquiries",label:"Inquiries"},
+            {key:"inv_operating_income",  label:"Operating Income"},
+            {key:"inv_operating_expense", label:"Operating Expense"},
+            {key:"inv_income_vs_expense", label:"Income vs. Expense"},
+            {key:"inv_noi",               label:"Net Operating Income"},
+            {key:"inv_income_by_property",label:"Income by Property"},
+            {key:"inv_expense_by_property",label:"Expense by Property"},
+            {key:"inv_noi_by_property",   label:"NOI by Property"},
+            {key:"inv_utility",           label:"Utility Income vs. Expense"},
+            {key:"inv_occupancy_rate",    label:"Occupancy Rate"},
+            {key:"inv_occupancy_by_property",label:"Occupancy by Property"},
+            {key:"inv_lease_expirations", label:"Lease Expirations"},
+            {key:"inv_rent_growth",       label:"Rent Growth & Market Rent"},
           ];
           return INV_CHART_SLOTS.map(({key,label})=>{
             const has=!!state.invCharts[key];
@@ -5219,7 +5245,7 @@ function clearChart(key){
 function clearInvChart(key){
   state.invCharts[key]=null;
   saveInvChartsForKey(currentSaveKey(),state.invCharts);
-  _refreshInvReportHTML();
+  (state.source==='vestmint'?_refreshVestmintReportHTML():_refreshInvReportHTML());
   render();
 }
 // ─── CHART FILENAME MAPPING ───────────────────────────────────────────────────
@@ -7170,6 +7196,7 @@ function resetAll(){
 }
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 let _authMode = "signin"; // "signin" | "signup"
+let _authReady = false;  // blocks authSubmit for 1.5 s to prevent password-manager auto-fire
 function _authMsg(txt, kind){
   const el = document.getElementById('auth-msg');
   if(!el) return;
@@ -7187,6 +7214,7 @@ function authToggleMode(){
   _authMsg('', 'info');
 }
 async function authSubmit(){
+  if(!_authReady) return; // ignore password-manager auto-fire before app is ready
   const email = (document.getElementById('auth-email').value||'').trim().toLowerCase();
   const pw    = document.getElementById('auth-password').value || '';
   if(!email || !pw){ _authMsg('Enter your email and password.','error'); return; }
@@ -7318,14 +7346,16 @@ async function _bootAfterAuth(user){
   if(headerLogo) headerLogo.src = LOGO_SYMBOL;
   const authLogo = document.getElementById('auth-logo');
   if(authLogo) authLogo.src = LOGO_FULL;
-  // Briefly disable the sign-in button on page load so password managers
-  // (e.g. LastPass) cannot auto-click it before the app is ready.
-  // Real users won't notice the 1.5-second delay.
+  // Block authSubmit for 1.5 s on page load so password managers (e.g. LastPass)
+  // cannot auto-fire the login — via button click OR Enter key — before the app
+  // is ready. Real users won't notice the brief delay.
   (function(){
     const btn = document.getElementById('auth-submit');
-    if(!btn) return;
-    btn.disabled = true;
-    setTimeout(function(){ btn.disabled = false; }, 1500);
+    if(btn) btn.disabled = true;
+    setTimeout(function(){
+      _authReady = true;
+      if(btn) btn.disabled = false;
+    }, 1500);
   })();
   // Allow Enter key to submit the login form
   ['auth-email','auth-password'].forEach(id=>{
