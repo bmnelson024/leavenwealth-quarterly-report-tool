@@ -281,9 +281,18 @@ const STORE_TABLE = "qr_store";
 function _isCacheOnlyKey(k){
   return k === SAVES_INDEX_KEY;
 }
+// Guard against concurrent supaBootstrap() calls. If a second call arrives
+// while one is in flight, it sets the pending flag so the first call schedules
+// a follow-up run when it finishes, rather than both calls interleaving their
+// cache-wipe/write steps and potentially leaving the cache empty.
+let _bootstrapInFlight = false;
+let _bootstrapRetryPending = false;
+
 // Pull every persisted row out of Supabase into _dbCache, then derive the
 // saves index locally. Called on login / page reload after auth succeeds.
 async function supaBootstrap(){
+  if(_bootstrapInFlight){ _bootstrapRetryPending=true; return; }
+  _bootstrapInFlight=true;
   // Fetch all rows into a fresh map BEFORE touching _dbCache so that a network
   // failure mid-load never leaves the cache in a half-empty state.
   const fresh = {};
@@ -324,6 +333,16 @@ async function supaBootstrap(){
   }
   idx.sort((a,b)=>String(b.savedAt||"").localeCompare(String(a.savedAt||"")));
   _dbCache[SAVES_INDEX_KEY] = JSON.stringify(idx);
+  _bootstrapInFlight=false;
+  if(_bootstrapRetryPending){
+    _bootstrapRetryPending=false;
+    // A second caller arrived while we were in flight — run again now that
+    // the cache is settled (e.g. TOKEN_REFRESHED fired mid-bootstrap).
+    setTimeout(()=>supaBootstrap().then(()=>{
+      state.showHome=getSavesIndex().length>0;
+      try{render();}catch(e){}
+    }).catch(e=>console.warn('Deferred bootstrap failed:',e)),50);
+  }
 }
 function dbGet(k){return Object.prototype.hasOwnProperty.call(_dbCache,k)?_dbCache[k]:null;}
 // dbSet(k, v, onError?) — update the in-memory cache immediately and persist
@@ -7207,6 +7226,18 @@ async function _bootAfterAuth(user){
   // First render
   state.showHome = getSavesIndex().length > 0;
   try{ render(); }catch(e){ console.warn('Bootstrap render failed:',e); }
+  // If we got no saves on the first load (stale token / slow connection),
+  // retry once after 2 s — by then TOKEN_REFRESHED will have fired and
+  // the fresh token will be in place.
+  if(getSavesIndex().length === 0){
+    setTimeout(async()=>{
+      try{
+        await supaBootstrap();
+        state.showHome = getSavesIndex().length > 0;
+        if(state.showHome) try{render();}catch(e){}
+      }catch(e){ console.warn('First-load retry failed:',e); }
+    }, 2000);
+  }
 }
 // ─── STARTUP ──────────────────────────────────────────────────────────────────
 // Set header/auth-card logos as soon as the DOM is ready so the login screen
