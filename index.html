@@ -7238,9 +7238,20 @@ async function _bootAfterAuth(user){
   }
 })();
 // React to sign-in / sign-out from other tabs (same Supabase project).
-sb.auth.onAuthStateChange((event, session)=>{
+sb.auth.onAuthStateChange(async (event, session)=>{
   if(event === 'SIGNED_OUT'){
     window.location.reload();
+    return;
+  }
+  // If the access token was stale at startup, Supabase refreshes it in the
+  // background and fires TOKEN_REFRESHED. Re-run supaBootstrap() so the cache
+  // is populated with the user's actual data, then re-render.
+  if(event === 'TOKEN_REFRESHED' && session && session.user){
+    try{
+      await supaBootstrap();
+      state.showHome = getSavesIndex().length > 0;
+      render();
+    }catch(e){ console.warn('Re-bootstrap after token refresh failed:',e); }
   }
 });
 </script>
