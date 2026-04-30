@@ -296,10 +296,11 @@ async function supaBootstrap(){
   // AbortController lets us cancel a hanging fetch so the _bootstrapInFlight
   // flag is never permanently stuck and retries can proceed.
   const abortCtrl = new AbortController();
-  const abortTimer = setTimeout(()=>abortCtrl.abort(), 10000); // cancel after 10 s
+  const abortTimer = setTimeout(()=>abortCtrl.abort(), 15000); // cancel after 15 s
   try{
-    // Fetch all rows into a fresh map BEFORE touching _dbCache so that a network
-    // failure mid-load never leaves the cache in a half-empty state.
+    // Fetch only small metadata rows — exclude large binary data prefixes
+    // (chart images, Excel file buffers, PDF pages) which can be hundreds of MB
+    // and cause the query to time out. These are loaded on-demand when reports open.
     const fresh = {};
     const pageSize = 1000;
     let from = 0;
@@ -307,6 +308,12 @@ async function supaBootstrap(){
       const { data, error } = await sb
         .from(STORE_TABLE)
         .select("key,value")
+        .not('key', 'like', 'lw_charts_%')
+        .not('key', 'like', 'lw_invcharts_%')
+        .not('key', 'like', 'lw_bgcc_%')
+        .not('key', 'like', 'lw_files_%')
+        .not('key', 'like', 'lw_invfiles_%')
+        .not('key', 'like', 'lw_vmfin_%')
         .range(from, from + pageSize - 1)
         .abortSignal(abortCtrl.signal);
       if(error) throw error;
@@ -361,6 +368,27 @@ async function supaBootstrap(){
   }
 }
 function dbGet(k){return Object.prototype.hasOwnProperty.call(_dbCache,k)?_dbCache[k]:null;}
+// Fetch the large binary keys (charts, files, financials) for a specific save key
+// from Supabase into _dbCache on demand, since supaBootstrap() no longer loads them.
+async function supaFetchLargeKeysForSave(saveKey){
+  if(!saveKey||!sb||!_currentUser) return;
+  const keysToFetch = [
+    CHARTS_PREFIX+saveKey, INV_CHARTS_PREFIX+saveKey, BG_CHAMPION_CHARTS_PREFIX+saveKey,
+    FILES_PREFIX+saveKey, INV_FILES_PREFIX+saveKey, VESTMINT_FINANCIALS_PREFIX+saveKey
+  ];
+  // Only fetch keys not already in cache
+  const missing = keysToFetch.filter(k=>!Object.prototype.hasOwnProperty.call(_dbCache,k));
+  if(missing.length===0) return;
+  try{
+    const { data, error } = await sb
+      .from(STORE_TABLE)
+      .select("key,value")
+      .in('key', missing);
+    if(error){ console.warn('[QRB] supaFetchLargeKeysForSave error:',error); return; }
+    if(data) for(const row of data) _dbCache[row.key]=row.value;
+    console.log('[QRB] supaFetchLargeKeysForSave: loaded '+(data?data.length:0)+' large keys for '+saveKey);
+  }catch(e){ console.warn('[QRB] supaFetchLargeKeysForSave exception:',e); }
+}
 // dbSet(k, v, onError?) — update the in-memory cache immediately and persist
 // to Supabase in the background. onError is invoked if the background write
 // fails so the UI can surface it (same contract as the old IDB version).
@@ -872,8 +900,11 @@ function setAutoSaveStatus(status, msg){
     el.style.color = '#b91c1c';
   }
 }
-function loadSave(key){
+async function loadSave(key){
   try{
+    // Fetch charts/files/financials for this save from Supabase before reading cache
+    // (supaBootstrap no longer loads these large keys, so we pull them on demand here)
+    await supaFetchLargeKeysForSave(key);
     const data=JSON.parse(dbGet(SAVE_PREFIX+key)||"null");
     if(!data){showError("Save data not found.");return;}
     const emptyCharts={chart_operating_income:null,chart_operating_expense:null,chart_income_vs_expense:null,chart_noi:null,chart_lease_expirations:null,chart_rent_growth:null,chart_occupancy_rate:null,chart_capital_expense:null,chart_maintenance_expense:null,chart_loss_to_lease:null,chart_utility_income_expense:null};
