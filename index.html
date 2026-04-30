@@ -583,6 +583,7 @@ function _makeDefaultState(){
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
     businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{}, bpCurrentRentParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
+    _bpRentRefreshing: false, // guards the auto-refresh timeout in the Business Plan unit rent table
     invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
     // ── VestMint Fund mode state ──
     vestmintFundOverview: "",   // editable fund summary / boilerplate text
@@ -1108,8 +1109,8 @@ function processDataWithConfirm(){
     return;
   }
   const missing = missingCoreFiles();
-  if(missing.length === 0){ processData(); return; }
-  showMissingFilesPrompt(missing, processData);
+  if(missing.length === 0){ dispatchProcessData(); return; }
+  showMissingFilesPrompt(missing, dispatchProcessData);
 }
 function showSavePrompt(onContinue){
   let m=document.getElementById("lw-save-modal");
@@ -1241,7 +1242,7 @@ let _homeShowAll = false; // toggled by "Show more / Show less" on home screen
 function renderHome(){
   document.getElementById("home-link").innerHTML="";
   document.getElementById("steps-indicator").innerHTML="";
-  document.getElementById("error-box").style.display="none";
+  clearError();
   clearWarning();
   const saves=getSavesIndex();
   const fmtDate=iso=>{try{const d=new Date(iso);return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})+" at "+d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});}catch(e){return iso;}};
@@ -3265,7 +3266,7 @@ function refreshUnitCurrentRents(){
 }
 function processInvestmentData(opts){
   try{
-    showError("");
+    clearError();
     window._propTaxMissingProps=[];  // reset at start so re-runs don't accumulate duplicates
     const results=[];
     const propErrors=[];
@@ -4442,19 +4443,19 @@ function renderInvestmentStep0(){
       </label>
       ${state.invSections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;padding-top:2px">
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Prior Year-End)</label>
-          <input type="text" placeholder="e.g. 289,116.08" value="${state.invLoan.principalInception}"
+          <input type="text" placeholder="e.g. 289,116.08" value="${escapeHtml(state.invLoan.principalInception||'')}"
             oninput="state.invLoan.principalInception=this.value"
             style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Prior Year-End Date (for label)</label>
-          <input type="text" placeholder="e.g. 12/31/2024" value="${state.invLoan.principalInceptionDate||""}"
+          <input type="text" placeholder="e.g. 12/31/2024" value="${escapeHtml(state.invLoan.principalInceptionDate||'')}"
             oninput="state.invLoan.principalInceptionDate=this.value"
             style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Current)</label>
-          <input type="text" placeholder="e.g. 438,302.06" value="${state.invLoan.principalCurrent}"
+          <input type="text" placeholder="e.g. 438,302.06" value="${escapeHtml(state.invLoan.principalCurrent||'')}"
             oninput="state.invLoan.principalCurrent=this.value"
             style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Date (for label)</label>
-          <input type="text" placeholder="e.g. 12/31/2025" value="${state.invLoan.principalCurrentDate}"
+          <input type="text" placeholder="e.g. 12/31/2025" value="${escapeHtml(state.invLoan.principalCurrentDate||'')}"
             oninput="state.invLoan.principalCurrentDate=this.value"
             style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       </div>`:''}
@@ -4463,7 +4464,7 @@ function renderInvestmentStep0(){
           <input type="checkbox" ${state.invSections.writeoffs?"checked":""} onchange="state.invSections.writeoffs=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
           <span style="font-size:12px;font-weight:600;color:#1a3a35">Include Total Write-offs in report</span>
         </label>
-        ${state.invSections.writeoffs?`<input type="text" placeholder="e.g. 3,054,449" value="${state.invLoan.writeoffs}"
+        ${state.invSections.writeoffs?`<input type="text" placeholder="e.g. 3,054,449" value="${escapeHtml(state.invLoan.writeoffs||'')}"
           oninput="state.invLoan.writeoffs=this.value"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>`:''}
       </div>
@@ -4692,7 +4693,7 @@ function renderInvestmentStep0(){
     </div>`;
 }
 // ─── PROCESS DATA ────────────────────────────────────────────────────────────
-function processData() {
+function dispatchProcessData() {
   if(state.source==='appfolio'){processDataAppFolio();return;}
   processBuildium();
 }
@@ -4706,7 +4707,7 @@ function calcOccAppFolio(csv){
 }
 function processDataAppFolio() {
   try {
-    showError("");
+    clearError();
     // Income statement is now optional — if missing, all financial fields stay
     // at zero and the Income Statement / Snapshot tiles auto-hide downstream.
     let totalIncome = 0, totalExpense = 0, noi = 0, capex = 0;
@@ -4875,7 +4876,7 @@ function processDataAppFolio() {
 }
 function processBuildium() {
   try {
-    showError("");
+    clearError();
     // Income statement is now optional — if missing, all financial fields stay
     // at zero and the Income Statement / Snapshot tiles auto-hide downstream.
     let totalIncome = 0, totalExpense = 0, noi = 0, capex = 0;
@@ -5052,7 +5053,13 @@ function renderVestmintStep2(){
     </div>
 
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
-      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase">📊 Chart Uploads</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
+        <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase">📊 Chart Uploads</div>
+        <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
+          <input type="checkbox" ${state.vestmintHasProForma!==false?'checked':''} onchange="state.vestmintHasProForma=this.checked" style="accent-color:#1a3a35;width:13px;height:13px"/>
+          Show "vs. Pro Forma" in chart titles
+        </label>
+      </div>
       <div class="charts-info" style="margin-bottom:10px">📊 <strong>${chartsN}/12 charts uploaded</strong> — ${chartsN===12?"All charts ready!":"Missing charts will show placeholders in the report."}</div>
       <p style="font-size:12px;color:#5a8070;margin:0 0 10px">Same charts as an Investment Report — 12 slots across financial trends and leasing.</p>
       <div id="vm-charts-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
@@ -5579,6 +5586,10 @@ function _fuzzyPhotoScan(name){
     return null;
   } catch(e){ return null; }
 }
+function _isValidPhotoDataURI(val){
+  // Must be a non-empty string starting with a recognized image data URI prefix
+  return typeof val==='string' && /^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml);base64,/.test(val);
+}
 function loadPhotoForProperty(name){
   if(!name) return null;
   try{
@@ -5586,7 +5597,7 @@ function loadPhotoForProperty(name){
     const targetKey=photoStorageKey(name);
     // Exact match first
     const exact=dbGet(targetKey);
-    if(exact) return exact;
+    if(_isValidPhotoDataURI(exact)) return exact;
     // Fuzzy: scan all lw_photo_* keys for one whose normalized name is a
     // token-bounded substring of ours (or vice versa). Minimum score 5 chars to
     // guard against trivial tokens ("the", "apts") dragging in random hits.
@@ -5599,7 +5610,7 @@ function loadPhotoForProperty(name){
       const score=fuzzyKeyScore(norm, stored);
       if(score>=5&&score>bestScore){best=k;bestScore=score;}
     }
-    if(best) return dbGet(best);
+    if(best){ const bv=dbGet(best); if(_isValidPhotoDataURI(bv)) return bv; }
     // Alias fallback: if the fuzzy scan found nothing, try every known alias
     // for this property. Covers cases where the photo was saved under one name
     // (e.g. "1003-1005 Ave K") and loaded under another ("Carter Place").
@@ -5608,7 +5619,7 @@ function loadPhotoForProperty(name){
       if(alias===name) continue;
       const aliasKey=photoStorageKey(alias);
       const aliasVal=dbGet(aliasKey);
-      if(aliasVal) return aliasVal;
+      if(_isValidPhotoDataURI(aliasVal)) return aliasVal;
     }
     return null;
   } catch(e){ return null; }
@@ -5785,7 +5796,9 @@ function onPropertyNameBlur(val){
     if(savedFacts){ state.assetFacts=savedFacts; render(); }
   }
   // Auto-load prior quarter occupancy once we have the full property name.
-  if(!state.prevOccupancyInput){ tryAutoLoadPriorOccupancy(); }
+  // tryAutoLoadPriorOccupancy returns true if it found and loaded data — render
+  // so the UI reflects the newly populated prevOccupancyInput / prevMetrics.
+  if(!state.prevOccupancyInput){ if(tryAutoLoadPriorOccupancy()) render(); }
 }
 // One-time cleanup: removes garbage "lw_photo_*" and "lw_assetfacts_*" db entries
 // whose normalized suffix is too short to be a real property name (≤5 non-underscore
@@ -6449,6 +6462,7 @@ function showWarning(msg){
   el.innerHTML=msg; el.style.display=msg?"block":"none";
 }
 function clearWarning(){ showWarning(""); }
+function clearError(){ showError(""); }
 
 // ── Property tax detection ────────────────────────────────────────────────
 // Returns true if the income statement rows contain a property tax / escrow line
@@ -6541,6 +6555,9 @@ function buildAssetFactsInputs(){
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function render(){
   if(state.showHome){renderHome();return;}
+  // Cache once per render — getSavesIndex() does a JSON.parse on every call so
+  // calling it 7+ times inside template literals per render is wasteful.
+  const _hasSaves = getSavesIndex().length > 0;
   // ── Investment mode routing ──
   if(state.source==='investment'){
     const hl=document.getElementById("home-link");
@@ -6548,7 +6565,7 @@ function render(){
     const si=document.getElementById("steps-indicator");
     const INV_STEPS=["Setup & Upload","Review Metrics","Generate Report"];
     si.innerHTML=INV_STEPS.map((s,i)=>`<div class="step"><div class="step-circle ${i<state.step?"done":i===state.step?"active":""}">${i<state.step?"✓":i+1}</div><div class="step-label ${i===state.step?"active":""}">${s}</div></div>`).join("");
-    document.getElementById("error-box").style.display="none";
+    clearError();
     if(state.step===0){renderInvestmentStep0();return;}
     if(state.step===1 && !state.invMetrics){
       const el=document.getElementById("step-content");
@@ -6654,7 +6671,7 @@ function render(){
           <div><h2 style="font-size:16px;font-weight:600;margin:0">✅ Investment Report Ready!</h2>
             <p style="font-size:12px;color:#9ca3af;margin:4px 0 0">Preview below — click Print to save as PDF.</p></div>
           <div style="display:flex;gap:8px">
-            ${getSavesIndex().length>0?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+            ${_hasSaves?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
             <button class="btn-back" onclick="state.invReportHTML=null;render()">← Edit</button>
             <button class="save-btn" onclick="saveProgress()">💾 Save</button>
             <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="(function(){const fr=document.getElementById('inv-print-frame');if(fr&&fr.contentWindow){fr.contentWindow.focus();fr.contentWindow.print();}})()">🖨️ Print / Save PDF</button>
@@ -6666,7 +6683,7 @@ function render(){
         </div>
         <iframe id="inv-print-frame" srcdoc="" style="position:fixed;top:-9999px;left:-9999px;width:816px;height:1056px;border:none;visibility:hidden;"></iframe>
         <div style="display:flex;gap:8px;margin-top:10px">
-          ${getSavesIndex().length>0?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+          ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
           <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new report? Clears all investment data.')){resetAll()}">+ Start New Report</button>
         </div>`;
       setTimeout(()=>{
@@ -6686,7 +6703,7 @@ function render(){
     const si=document.getElementById("steps-indicator");
     const VM_STEPS=["Setup & Upload","Review Metrics","Generate Report"];
     si.innerHTML=VM_STEPS.map((s,i)=>`<div class="step"><div class="step-circle ${i<state.step?"done":i===state.step?"active":""}">${i<state.step?"✓":i+1}</div><div class="step-label ${i===state.step?"active":""}">${s}</div></div>`).join("");
-    document.getElementById("error-box").style.display="none";
+    clearError();
     if(state.step===0){renderInvestmentStep0();return;}
     if(state.step===1 && !state.invMetrics){
       const el=document.getElementById("step-content");
@@ -6752,7 +6769,7 @@ function render(){
           <div><h2 style="font-size:16px;font-weight:600;margin:0">✅ VestMint Fund Report Ready!</h2>
             <p style="font-size:12px;color:#9ca3af;margin:4px 0 0">Preview below — click Print to save as PDF.</p></div>
           <div style="display:flex;gap:8px">
-            ${getSavesIndex().length>0?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+            ${_hasSaves?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
             <button class="btn-back" onclick="state.vmReportHTML=null;render()">← Edit</button>
             <button class="save-btn" onclick="saveProgress()">💾 Save</button>
             <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="(function(){const fr=document.getElementById('vm-print-frame');if(fr&&fr.contentWindow){fr.contentWindow.focus();fr.contentWindow.print();}})()">🖨️ Print / Save PDF</button>
@@ -6764,7 +6781,7 @@ function render(){
         </div>
         <iframe id="vm-print-frame" srcdoc="" style="position:fixed;top:-9999px;left:-9999px;width:816px;height:1056px;border:none;visibility:hidden;"></iframe>
         <div style="display:flex;gap:8px;margin-top:10px">
-          ${getSavesIndex().length>0?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+          ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
           <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new report? Clears all fund data.')){resetAll()}">+ Start New Report</button>
         </div>`;
       setTimeout(()=>{
@@ -6778,7 +6795,7 @@ function render(){
     return;
   }
   const hl=document.getElementById("home-link");
-  if(hl) hl.innerHTML=getSavesIndex().length>0?`<span class="all-reports-link" onclick="state.showHome=true;render()">← All Reports</span>`:"";
+  if(hl) hl.innerHTML=_hasSaves?`<span class="all-reports-link" onclick="state.showHome=true;render()">← All Reports</span>`:"";
   const si=document.getElementById("steps-indicator");
   si.innerHTML=STEPS.map((s,i)=>`
     <div class="step">
@@ -7004,7 +7021,7 @@ function render(){
     if(state.source==='buildium'){
       el.innerHTML = commonTop + `
       ${(()=>{
-        const buUploaded=Object.keys(state.files).filter(k=>["income","rr1","rr2","rr3","leasing","delinquency"].includes(k)&&state.files[k]).length;
+        const buUploaded=Object.keys(state.files||{}).filter(k=>["income","rr1","rr2","rr3","leasing","delinquency"].includes(k)&&(state.files||{})[k]).length;
         return `<div class="section-label">Buildium Reports <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${buUploaded}/6 uploaded</span></div>
       <div style="background:#e6f9f4;border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div>
@@ -7028,7 +7045,7 @@ function render(){
         <button class="process-btn" style="flex:1;margin:0" onclick="processDataWithConfirm()">Process Data →</button>
       </div>`;
     } else {
-      const afUploaded=Object.keys(state.files).filter(k=>["income","rr1","rr2","rr3","leasingSummary","renewalSummary","delinquency"].includes(k)&&state.files[k]).length;
+      const afUploaded=Object.keys(state.files||{}).filter(k=>["income","rr1","rr2","rr3","leasingSummary","renewalSummary","delinquency"].includes(k)&&(state.files||{})[k]).length;
       el.innerHTML = commonTop + `
       <div class="section-label">AppFolio Reports <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${afUploaded}/7 uploaded</span></div>
       <div style="background:#e6f9f4;border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -7171,7 +7188,7 @@ function render(){
           <p style="font-size:12px;color:#9ca3af;margin:4px 0 0">Preview below — click Print to save as PDF.</p>
         </div>
         <div style="display:flex;gap:8px">
-          ${getSavesIndex().length>0?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+          ${_hasSaves?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
           <button class="btn-back" style="white-space:nowrap" onclick="state.reportHTML=null;render()">← Edit</button>
           <button class="save-btn" onclick="saveProgress()">💾 Save</button>
           <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="printReport()">🖨️ Print / Save PDF</button>
@@ -7185,7 +7202,7 @@ function render(){
       </div>
       <iframe id="print-frame" srcdoc="" style="position:fixed;top:-9999px;left:-9999px;width:816px;height:1056px;border:none;visibility:hidden;"></iframe>
       <div style="display:flex;gap:8px;margin-top:10px">
-        ${getSavesIndex().length>0?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
+        ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
         <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new quarter? Clears all data.')){resetAll()}">+ Start New Quarter</button>
       </div>`;
     setTimeout(()=>{
