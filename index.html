@@ -7318,6 +7318,15 @@ async function _bootAfterAuth(user){
   if(headerLogo) headerLogo.src = LOGO_SYMBOL;
   const authLogo = document.getElementById('auth-logo');
   if(authLogo) authLogo.src = LOGO_FULL;
+  // Briefly disable the sign-in button on page load so password managers
+  // (e.g. LastPass) cannot auto-click it before the app is ready.
+  // Real users won't notice the 1.5-second delay.
+  (function(){
+    const btn = document.getElementById('auth-submit');
+    if(!btn) return;
+    btn.disabled = true;
+    setTimeout(function(){ btn.disabled = false; }, 1500);
+  })();
   // Allow Enter key to submit the login form
   ['auth-email','auth-password'].forEach(id=>{
     const el = document.getElementById(id);
