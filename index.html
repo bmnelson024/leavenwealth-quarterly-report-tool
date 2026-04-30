@@ -273,6 +273,12 @@ function parseColMonth(lbl){
 // to Supabase because raw Excel/CSV blobs would burn through free-tier storage.
 const _dbCache = {};
 const STORE_TABLE = "qr_store";
+// Tracks in-flight dbSet / dbRemove promises so supaBootstrap() can wait for
+// them to settle before wiping the cache. Without this, a TOKEN_REFRESHED
+// bootstrap could overwrite a key that was written to _dbCache but whose
+// Supabase upsert hadn't landed yet, causing the fresh fetch to return the
+// old server-side value and silently reverting the user's change.
+const _pendingWrites = new Set();
 // Keys that are intentionally NOT synced to Supabase (cache-only).
 // - SAVES_INDEX_KEY is derived from SAVE_PREFIX rows on every login.
 // (FILES_PREFIX / INV_FILES_PREFIX used to be cache-only to save storage
@@ -337,6 +343,13 @@ async function supaBootstrap(){
     const totalRows = Object.keys(fresh).length;
     const saveRows  = Object.keys(fresh).filter(k=>k.startsWith(SAVE_PREFIX)).length;
     console.log(`[QRB] supaBootstrap: loaded ${totalRows} total rows, ${saveRows} lw_save_* rows`);
+    // Drain any in-flight dbSet / dbRemove writes before wiping the cache.
+    // Without this, a TOKEN_REFRESHED bootstrap could fetch stale server data
+    // and overwrite a key that was updated locally but hadn't landed in Supabase yet.
+    if(_pendingWrites.size > 0){
+      console.log('[QRB] supaBootstrap: waiting for',_pendingWrites.size,'in-flight write(s) to settle');
+      await Promise.allSettled([..._pendingWrites]);
+    }
     // Only now swap the cache — all-or-nothing, no partial wipe.
     for(const k of Object.keys(_dbCache)) delete _dbCache[k];
     for(const [k,v] of Object.entries(fresh)) _dbCache[k] = v;
@@ -377,8 +390,13 @@ async function supaBootstrap(){
       // A second caller arrived while we were in flight — run again now that
       // the cache is settled (e.g. TOKEN_REFRESHED fired mid-bootstrap).
       setTimeout(()=>supaBootstrap().then(()=>{
-        state.showHome=getSavesIndex().length>0;
-        try{render();}catch(e){}
+        // Only update showHome / re-render if the user hasn't navigated into a
+        // report already — otherwise this forced render would snap them back to
+        // the home screen mid-workflow.
+        if(state.showHome){
+          state.showHome=getSavesIndex().length>0;
+          try{render();}catch(e){}
+        }
       }).catch(e=>console.warn('[QRB] Deferred bootstrap failed:',e)),50);
     }
   }
@@ -413,7 +431,7 @@ function dbSet(k,v,onError){
   if(_isCacheOnlyKey(k)) return;
   const payload = { key:k, value:v, updated_at:new Date().toISOString() };
   if(_currentUser && _currentUser.id) payload.updated_by = _currentUser.id;
-  sb.from(STORE_TABLE).upsert(payload).then(({error})=>{
+  const p = sb.from(STORE_TABLE).upsert(payload).then(({error})=>{
     if(error){
       console.warn('Supabase write failed for key:',k,error);
       if(typeof onError==='function') try{onError(error);}catch(e){}
@@ -422,15 +440,19 @@ function dbSet(k,v,onError){
     console.warn('Supabase write rejected for key:',k,err);
     if(typeof onError==='function') try{onError(err);}catch(e){}
   });
+  _pendingWrites.add(p);
+  p.finally(()=>_pendingWrites.delete(p));
 }
 function dbRemove(k){
   delete _dbCache[k];
   if(_isCacheOnlyKey(k)) return;
-  sb.from(STORE_TABLE).delete().eq('key',k).then(({error})=>{
+  const p = sb.from(STORE_TABLE).delete().eq('key',k).then(({error})=>{
     if(error) console.warn('Supabase delete failed for key:',k,error);
   }, err=>{
     console.warn('Supabase delete rejected for key:',k,err);
   });
+  _pendingWrites.add(p);
+  p.finally(()=>_pendingWrites.delete(p));
 }
 function dbKeys(){return Object.keys(_dbCache);}
 function downloadBackup(){
@@ -989,6 +1011,7 @@ async function loadSave(key){
     // Backfill fields for old saves that predate them
     if(state.invMetrics && !state.invMetrics.expenseCategories) state.invMetrics.expenseCategories=[];
     if(state.invMetrics && !state.invMetrics.unitCurrentRents) state.invMetrics.unitCurrentRents={};
+    if(state.invMetrics && !Array.isArray(state.invMetrics.propertyMetrics)) state.invMetrics.propertyMetrics=[];
     // Restore investment property files (saved separately, like charts)
     applyInvFiles(state.invProperties, loadInvFilesForKey(key));
     // Rebuild row arrays from restored files. Saved metrics omit rentRollRows /
@@ -3205,17 +3228,15 @@ function parsePropertyMetrics(prop){
 function _buildUnitCurrentRents(){
   const map={};
   const fileKeys=Object.keys(_dbCache).filter(k=>k.startsWith('lw_files_'));
-  console.log('[LW Debug] lw_files_ keys in cache:',fileKeys);
   for(const prop of (state.invProperties||[])){
     let rr3Text=(prop.files&&prop.files.rr3)||null;
     if(!rr3Text && prop._imported && prop._importedFrom){
       try{
         const sf=loadFilesForKey(prop._importedFrom);
-        console.log('[LW Debug] prop "'+prop.name+'" importedFrom="'+prop._importedFrom+'" loadFilesForKey result:',sf?Object.keys(sf):'null');
         if(sf&&sf.rr3)rr3Text=sf.rr3;
-      }catch(e){console.warn('[LW Debug] loadFilesForKey error:',e);}
+      }catch(e){console.warn('[QRB] loadFilesForKey error for imported prop:',e);}
     }
-    if(!rr3Text){console.log('[LW Debug] prop "'+prop.name+'" — no rr3, skipping');continue;}
+    if(!rr3Text) continue;
     try{
       const isBd=prop.source==='buildium';
       const rows=isBd
@@ -4866,6 +4887,7 @@ function processBuildium() {
         ({ totalIncome, totalExpense, noi, capex, capexItems, incomeRows, monthCols } = _qParsed);
         if (!totalIncome && !totalExpense) {
           showError("Warning: Income Statement parsed but contained no totals. Verify the file is a standard Buildium income statement.");
+          clearWarning();
         }
         warnIfNoPropTax(incomeRows, state.propertyName||"");
       } else {
@@ -6953,7 +6975,7 @@ function render(){
       ${fileRow("rr2","Rent Roll — End of "+mo[1],"Pull at end of month",'text',"tryAutoFillPropertyName")}
       ${fileRow("rr3","Rent Roll — End of "+mo[2],"Pull at end of month",'text',"tryAutoFillPropertyName")}`;
     const chartsSection = `
-      <div class="section-label" style="margin-top:12px">AppFolio IM Charts <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${chartsN}/10 uploaded</span>
+      <div class="section-label" style="margin-top:12px">AppFolio IM Charts <span style="margin-left:8px;background:#e6f9f4;color:#2e7d6e;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600">${chartsN}/11 uploaded</span>
         <label style="display:inline-flex;align-items:center;gap:5px;margin-left:14px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
           <input type="checkbox" ${state.hasProForma!==false?'checked':''} onchange="state.hasProForma=this.checked" style="accent-color:#1a3a35;width:13px;height:13px"/>
           Show "vs. Pro Forma" in chart titles
@@ -7132,7 +7154,7 @@ function render(){
           <span class="narrative-label">${l}<span class="auto-badge">AUTO</span></span>
           <textarea id="narr-${k}" oninput="state.narratives['${k}']=this.value;state.narrativesEdited=true">${escapeHtml(state.narratives[k])}</textarea>
         </div>`).join("")}
-      <div class="charts-info">📊 <strong>${chartsN}/10 charts uploaded</strong> — ${chartsN===10?"All charts ready!":"Missing charts will show placeholders."}</div>
+      <div class="charts-info">📊 <strong>${chartsN}/11 charts uploaded</strong> — ${chartsN===11?"All charts ready!":"Missing charts will show placeholders."}</div>
       <div class="btn-row">
         <button class="btn-back" onclick="state.step=1;render()">← Back</button>
         <button class="save-btn" onclick="saveProgress()">💾 Save</button>
