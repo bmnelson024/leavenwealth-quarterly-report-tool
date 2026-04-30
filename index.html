@@ -293,6 +293,10 @@ let _bootstrapRetryPending = false;
 async function supaBootstrap(){
   if(_bootstrapInFlight){ _bootstrapRetryPending=true; return; }
   _bootstrapInFlight=true;
+  // AbortController lets us cancel a hanging fetch so the _bootstrapInFlight
+  // flag is never permanently stuck and retries can proceed.
+  const abortCtrl = new AbortController();
+  const abortTimer = setTimeout(()=>abortCtrl.abort(), 10000); // cancel after 10 s
   try{
     // Fetch all rows into a fresh map BEFORE touching _dbCache so that a network
     // failure mid-load never leaves the cache in a half-empty state.
@@ -303,13 +307,18 @@ async function supaBootstrap(){
       const { data, error } = await sb
         .from(STORE_TABLE)
         .select("key,value")
-        .range(from, from + pageSize - 1);
+        .range(from, from + pageSize - 1)
+        .abortSignal(abortCtrl.signal);
       if(error) throw error;
       if(!data || data.length === 0) break;
       for(const row of data) fresh[row.key] = row.value;
       if(data.length < pageSize) break;
       from += pageSize;
     }
+    clearTimeout(abortTimer);
+    const totalRows = Object.keys(fresh).length;
+    const saveRows  = Object.keys(fresh).filter(k=>k.startsWith(SAVE_PREFIX)).length;
+    console.log(`[QRB] supaBootstrap: loaded ${totalRows} total rows, ${saveRows} lw_save_* rows`);
     // Only now swap the cache — all-or-nothing, no partial wipe.
     for(const k of Object.keys(_dbCache)) delete _dbCache[k];
     for(const [k,v] of Object.entries(fresh)) _dbCache[k] = v;
@@ -334,7 +343,9 @@ async function supaBootstrap(){
     }
     idx.sort((a,b)=>String(b.savedAt||"").localeCompare(String(a.savedAt||"")));
     _dbCache[SAVES_INDEX_KEY] = JSON.stringify(idx);
+    console.log(`[QRB] supaBootstrap: index built with ${idx.length} saves`);
   } finally {
+    clearTimeout(abortTimer); // no-op if already cleared on success path
     // Always release the lock — even if the Supabase query threw — so that
     // retries and TOKEN_REFRESHED re-runs are never permanently blocked.
     _bootstrapInFlight=false;
@@ -345,7 +356,7 @@ async function supaBootstrap(){
       setTimeout(()=>supaBootstrap().then(()=>{
         state.showHome=getSavesIndex().length>0;
         try{render();}catch(e){}
-      }).catch(e=>console.warn('Deferred bootstrap failed:',e)),50);
+      }).catch(e=>console.warn('[QRB] Deferred bootstrap failed:',e)),50);
     }
   }
 }
@@ -1179,10 +1190,15 @@ function renderHome(){
         <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Saved Reports</h2>
         <p style="font-size:13px;color:#5a8070">Resume where you left off, or start a fresh report.</p>
       </div>
-      <button onclick="resetAll();state.showHome=false;_homeShowAll=false;render()"
-        style="background:#1a3a35;color:white;border:none;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0">
-        + New Report
-      </button>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        <button id="sync-btn" onclick="(async()=>{const b=document.getElementById('sync-btn');b.disabled=true;b.textContent='Syncing…';try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){b.disabled=false;b.textContent='↻ Sync';}})();"
+          style="background:white;color:#2e7d6e;border:1.5px solid #c8e6de;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap"
+          title="Re-sync reports from the cloud">↻ Sync</button>
+        <button onclick="resetAll();state.showHome=false;_homeShowAll=false;render()"
+          style="background:#1a3a35;color:white;border:none;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">
+          + New Report
+        </button>
+      </div>
     </div>
     ${(()=>{
       if(!saves.length) return `<div style="background:white;border:1px solid #c8e6de;border-radius:12px;padding:24px;text-align:center;color:#9ca3af;font-size:13px;margin-bottom:16px;">No saved reports yet.</div>`;
@@ -1926,6 +1942,7 @@ async function rewriteWithClaude(kind){
           propertyName: state.propertyName || "Property",
           quarter: state.currentQuarter || "",
           prevLabel: state.prevQuarterLabel || "Prior Quarter",
+          isInceptionReport: !!state.isInceptionReport,
           metrics: {
             totalIncome: metrics.totalIncome, totalExpense: metrics.totalExpense, noi: metrics.noi,
             occupancy: metrics.occupancy, avgEconOcc: metrics.avgEconOcc,
@@ -1980,7 +1997,12 @@ async function rewriteWithClaude(kind){
           })(),
         };
 
-    const { data, error } = await sb.functions.invoke('narratives', { body: payload });
+    const NARRATIVE_TIMEOUT_MS = 45_000; // 45 s — Claude Sonnet is usually <15 s
+    const invokeResult = await Promise.race([
+      sb.functions.invoke('narratives', { body: payload }),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('Narrative rewrite timed out — Claude took too long. Try again.')), NARRATIVE_TIMEOUT_MS))
+    ]);
+    const { data, error } = invokeResult;
     if(error) throw error;
     if(!data || (!data.income && !data.expenses && !data.outlook)) throw new Error("Empty narrative response from server");
 
@@ -6696,9 +6718,12 @@ function render(){
   if(state.step===0){
     if(!state.source){
       el.innerHTML=`
-        <div style="margin-bottom:24px">
-          <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Select Data Source</h2>
-          <p style="font-size:13px;color:#5a8070">Choose which property management platform your reports are exported from.</p>
+        <div style="margin-bottom:24px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Select Data Source</h2>
+            <p style="font-size:13px;color:#5a8070">Choose which property management platform your reports are exported from.</p>
+          </div>
+          <button onclick="(async()=>{this.disabled=true;this.textContent='Syncing…';try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){this.disabled=false;this.textContent='↻ Sync Reports';}})();" style="font-size:12px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1.5px solid #c8e6de;border-radius:6px;padding:7px 14px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif" title="Re-sync your saved reports from the cloud">↻ Sync Reports</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;grid-auto-rows:auto">
           <div class="home-card" style="flex-direction:column;align-items:flex-start;gap:10px;cursor:pointer;padding:20px 20px 16px" onclick="selectSource('buildium')">
@@ -7232,16 +7257,26 @@ async function _bootAfterAuth(user){
   state.showHome = getSavesIndex().length > 0;
   try{ render(); }catch(e){ console.warn('Bootstrap render failed:',e); }
   // If we got no saves on the first load (stale token / slow connection),
-  // retry once after 2 s — by then TOKEN_REFRESHED will have fired and
-  // the fresh token will be in place.
+  // retry up to 3 times with increasing backoff so that TOKEN_REFRESHED
+  // has time to fire and the fresh token is in place.
   if(getSavesIndex().length === 0){
-    setTimeout(async()=>{
+    const retryDelays = [2000, 6000, 15000];
+    let attempt = 0;
+    const tryRetry = async () => {
+      if(getSavesIndex().length > 0) return; // already loaded by TOKEN_REFRESHED handler
       try{
+        console.log(`[QRB] First-load retry attempt ${attempt+1}`);
         await supaBootstrap();
         state.showHome = getSavesIndex().length > 0;
-        if(state.showHome) try{render();}catch(e){}
-      }catch(e){ console.warn('First-load retry failed:',e); }
-    }, 2000);
+        try{render();}catch(e){}
+        if(getSavesIndex().length > 0) return; // success
+      }catch(e){ console.warn(`[QRB] First-load retry ${attempt+1} failed:`,e); }
+      attempt++;
+      if(attempt < retryDelays.length){
+        setTimeout(tryRetry, retryDelays[attempt]);
+      }
+    };
+    setTimeout(tryRetry, retryDelays[0]);
   }
 }
 // ─── STARTUP ──────────────────────────────────────────────────────────────────
@@ -7300,21 +7335,32 @@ async function _bootAfterAuth(user){
     _authMsg('Could not contact Supabase. Check your internet connection and reload.', 'error');
   }
 })();
-// React to sign-in / sign-out from other tabs (same Supabase project).
+// React to auth state changes (sign-in, sign-out, token refresh, initial session).
+// This is our most reliable hook for ensuring the cache is populated — it fires
+// for every token event regardless of how the user authenticated.
+const _AUTH_RELOAD_EVENTS = new Set(['SIGNED_IN','TOKEN_REFRESHED','INITIAL_SESSION']);
 sb.auth.onAuthStateChange(async (event, session)=>{
+  console.log('[QRB] onAuthStateChange:', event, session?.user?.email || '(no user)');
   if(event === 'SIGNED_OUT'){
     window.location.reload();
     return;
   }
-  // If the access token was stale at startup, Supabase refreshes it in the
-  // background and fires TOKEN_REFRESHED. Re-run supaBootstrap() so the cache
-  // is populated with the user's actual data, then re-render.
-  if(event === 'TOKEN_REFRESHED' && session && session.user){
+  if(_AUTH_RELOAD_EVENTS.has(event) && session && session.user){
+    // Re-run bootstrap on any event that means we have a (possibly new) valid
+    // token. The _bootstrapInFlight guard prevents concurrent runs — if one is
+    // already in flight (e.g. from authSubmit calling _bootAfterAuth at the
+    // same time), it sets _bootstrapRetryPending=true and schedules a follow-up
+    // run with the fresh token once the current run finishes.
     try{
       await supaBootstrap();
       state.showHome = getSavesIndex().length > 0;
-      render();
-    }catch(e){ console.warn('Re-bootstrap after token refresh failed:',e); }
+      // Only re-render if the app is already visible (overlay is hidden).
+      // If the user is still on the login screen, _bootAfterAuth will render.
+      const overlay = document.getElementById('auth-overlay');
+      if(!overlay || overlay.style.display === 'none'){
+        try{render();}catch(e){}
+      }
+    }catch(e){ console.warn('[QRB] Re-bootstrap after',event,'failed:',e); }
   }
 });
 </script>
