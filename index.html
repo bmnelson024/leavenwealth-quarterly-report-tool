@@ -478,6 +478,7 @@ function _makeDefaultState(){
     loan:    { principalInception:"", principalInceptionDate:"", principalCurrent:"", principalCurrentDate:"", writeoffs:"" },
     invPrevMetrics: null,
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
+    isInceptionReport: false, // true = first quarter for this property; suppresses QoQ warnings & adjusts narrative
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
     businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{}, bpCurrentRentParsed:null },
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
@@ -672,6 +673,7 @@ function saveProgress(options){
     prevQuarterLabel:state.prevQuarterLabel, prevMetrics:state.prevMetrics,
     assetFacts:state.assetFacts||null, econOcc:state.econOcc,
     prevOccupancyInput:state.prevOccupancyInput||"",
+    isInceptionReport:state.isInceptionReport||false,
     cashOnHandInput:state.cashOnHandInput||"",
     sections:state.sections||makeDefaultSections(),
     metrics:savableMetrics, narratives:state.narratives, step:state.step,
@@ -854,6 +856,7 @@ function loadSave(key){
       prevMetrics:restoredPrevMetrics,
       assetFacts:data.assetFacts||null, econOcc:data.econOcc||{m1:"",m2:"",m3:""},
       prevOccupancyInput:data.prevOccupancyInput||"",
+      isInceptionReport:data.isInceptionReport||false,
       cashOnHandInput:data.cashOnHandInput||"",
       sections:data.sections||makeDefaultSections(),
       metrics:data.metrics||null, narratives:data.narratives||{income:"",expenses:"",capex:"",outlook:""},
@@ -1093,6 +1096,7 @@ function selectSource(src){
   state.photoAutoLoaded = false;
   state.assetFacts = null;
   state.prevOccupancyInput = "";
+  state.isInceptionReport = false;
   state.cashOnHandInput = "";
   state.suppIncome = {sfhIncome:'', sfhExpenses:'', locIncome:''};
   state.bgChampionCustom = {commentary:'', charts:[]};
@@ -1686,7 +1690,9 @@ const genNarratives = m => {
   return {
     income: incChg!==null
       ? `Total income for ${state.currentQuarter||""} ${incChg>=0?"increased":"decreased"} ${Math.abs(incChg).toFixed(0)}% quarter over quarter, ${incChg>=0?"rising":"declining"} from ${fmtWhole(prev.income)} in the prior quarter to ${fmtWhole(m.totalIncome)}. Average physical occupancy ${occChg===0?"held steady at":occChg>0?"improved to":"declined slightly to"} ${m.occupancy}%${occChg!==0?`, compared to ${prev.occupancy}% in the prior quarter`:""},${" "}reflecting ${occChg<0?season.softness:occChg>0?season.momentum:"stable demand at the property"}. Leasing activity remained active with ${m.newLeases} new leases and ${m.renewals} renewals signed during the quarter.`
-      : `Total income for ${state.currentQuarter||""} was ${fmtWhole(m.totalIncome)}. Average physical occupancy ${occChg===0?"held steady at":occChg>0?"improved to":"declined slightly to"} ${m.occupancy}%, reflecting ${occChg<0?season.softness:"stable demand"} at the property. Leasing activity remained active with ${m.newLeases} new leases and ${m.renewals} renewals signed during the quarter.`,
+      : state.isInceptionReport
+        ? `${state.currentQuarter||""} marks ${state.propertyName?"the inaugural quarter for "+state.propertyName:"the property's inaugural quarter under management"}, with total income of ${fmtWhole(m.totalIncome)}. Average physical occupancy was established at ${m.occupancy}%, reflecting ${m.occupancy>=90?season.momentum:"early stabilization"} at the property. Leasing activity opened with ${m.newLeases} new lease${m.newLeases!==1?"s":""} and ${m.renewals} renewal${m.renewals!==1?"s":""} signed during the quarter.`
+        : `Total income for ${state.currentQuarter||""} was ${fmtWhole(m.totalIncome)}. Average physical occupancy ${occChg===0?"held steady at":occChg>0?"improved to":"declined slightly to"} ${m.occupancy}%, reflecting ${occChg<0?season.softness:"stable demand"} at the property. Leasing activity remained active with ${m.newLeases} new leases and ${m.renewals} renewals signed during the quarter.`,
     expenses: (()=>{
       const base=expChg!==null
         ? `Operating expenses ${expChg>=0?"increased":"decreased"} ${Math.abs(expChg).toFixed(0)}% quarter over quarter, ${expChg>=0?"rising":"declining"} from ${fmtWhole(prev.expenses)} in the prior quarter to ${fmtWhole(m.totalExpense)} in ${state.currentQuarter||""}.`
@@ -1759,7 +1765,9 @@ const genNarratives = m => {
         ? `Capital expenditures ${capChg>=0?"increased":"decreased"} ${Math.abs(capChg).toFixed(0)}% quarter over quarter to ${fmtWhole(m.capex)}, ${capChg<0?"reflecting a gradual tapering of major project spend as capital initiatives from prior quarters near completion":"reflecting continued investment in property improvements and unit upgrades"}. ${keyInvest}${remodelSentence}`
         : `Capital expenditures totaled ${fmtWhole(m.capex)} for ${state.currentQuarter||""}. ${keyInvest}${remodelSentence}`;
     })(),
-    outlook: `${state.propertyName||"Property"} enters ${nextQtr(state.currentQuarter||"")} with ${m.occupancy>=90?"strong":"stable"} momentum — occupancy stands at ${m.occupancy}% and ${season.momentum}. ${delinqGood?"Delinquency stands at "+fmtWhole(m.delinquency)+" ("+delinqPct.toFixed(1)+"% of monthly rent collections) and remains well-controlled, reflecting effective property management practices.":"Management continues to actively address delinquency through consistent follow-up and lease enforcement protocols."} With capital spending ${capChg<0?"moderating":"continuing at a measured pace"} and ${(m.newLeases>0||m.renewals>0)?`leasing activity remaining active with ${m.newLeases} new lease${m.newLeases!==1?"s":""} and ${m.renewals} renewal${m.renewals!==1?"s":""} signed during the quarter`:"leasing activity continuing at a measured pace"}, we expect improved NOI performance and continued cash flow stability in the quarters ahead.`
+    outlook: state.isInceptionReport
+      ? `${state.propertyName||"Property"} enters ${nextQtr(state.currentQuarter||"")} with ${m.occupancy>=90?"strong":"stable"} early momentum — occupancy is established at ${m.occupancy}% and ${season.momentum}. ${delinqGood?"Delinquency stands at "+fmtWhole(m.delinquency)+" ("+delinqPct.toFixed(1)+"% of monthly rent collections), a strong result for an inaugural quarter.":"Management is actively working to stabilize delinquency as the property ramps toward full occupancy."} With an active leasing pipeline of ${m.newLeases} new lease${m.newLeases!==1?"s":""} and ${m.renewals} renewal${m.renewals!==1?"s":""} and capital investment underway, we expect continued stabilization and improving cash flow performance in the quarters ahead.`
+      : `${state.propertyName||"Property"} enters ${nextQtr(state.currentQuarter||"")} with ${m.occupancy>=90?"strong":"stable"} momentum — occupancy stands at ${m.occupancy}% and ${season.momentum}. ${delinqGood?"Delinquency stands at "+fmtWhole(m.delinquency)+" ("+delinqPct.toFixed(1)+"% of monthly rent collections) and remains well-controlled, reflecting effective property management practices.":"Management continues to actively address delinquency through consistent follow-up and lease enforcement protocols."} With capital spending ${capChg<0?"moderating":"continuing at a measured pace"} and ${(m.newLeases>0||m.renewals>0)?`leasing activity remaining active with ${m.newLeases} new lease${m.newLeases!==1?"s":""} and ${m.renewals} renewal${m.renewals!==1?"s":""} signed during the quarter`:"leasing activity continuing at a measured pace"}, we expect improved NOI performance and continued cash flow stability in the quarters ahead.`
   };
 };
 // ─── CLAUDE NARRATIVE REWRITE ────────────────────────────────────────────────
@@ -5789,6 +5797,8 @@ function parseQuarterFromExcel(buffer, currentQuarter) {
 }
 // parsePriorQuarterFromExcel: Extracts PRIOR quarter metrics from a 12-month income statement.
 function parsePriorQuarterFromExcel(buffer, currentQuarter) {
+  // Inception reports have no prior quarter — skip silently.
+  if(state.isInceptionReport) return null;
   try {
     const wb = XLSX.read(buffer, {type:"array", cellDates:true});
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -6726,6 +6736,17 @@ function render(){
       </div>
       <div class="section-label">Property Photo</div>
       <div class="photo-box">${photoBox}</div>
+      <div class="section-label" style="margin-top:12px">Report Type</div>
+      <div class="econ-box">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+          <input type="checkbox" ${state.isInceptionReport?"checked":""} onchange="state.isInceptionReport=this.checked;if(this.checked){state.prevOccupancyInput='';state.prevMetrics=null;state.prevQuarterLabel='';}render()" style="margin-top:2px;accent-color:#1a3a35;width:15px;height:15px;flex-shrink:0"/>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:#1a3a35">Inception / First Quarter Report</div>
+            <div style="font-size:11px;color:#5a8070;margin-top:2px">Check this for a newly acquired property with no prior quarter data. Suppresses QoQ comparisons, removes the prior occupancy field, and tailors narrative language for an inaugural quarter.</div>
+          </div>
+        </label>
+      </div>
+      ${state.isInceptionReport ? "" : `
       <div class="section-label" style="margin-top:12px">Prior Quarter Comparison
         <span style="font-weight:400;font-size:11px;color:#5a8070"> — occupancy is not in the income statement, enter once or auto-loads from saved reports</span>
       </div>
@@ -6748,7 +6769,8 @@ function render(){
             <div style="font-size:11px;color:#9ca3af">Income, expenses, NOI, and capex are read automatically from the 12-month statement.</div>
           </div>`;
         })()}
-      </div>`;
+      </div>`}`;
+
     const cashOnHandBox = `
       <div class="section-label" style="margin-top:12px">Cash on Hand
         <span style="font-weight:400;font-size:11px;color:#5a8070"> — enter current cash position (from internal sources)</span>
