@@ -293,55 +293,60 @@ let _bootstrapRetryPending = false;
 async function supaBootstrap(){
   if(_bootstrapInFlight){ _bootstrapRetryPending=true; return; }
   _bootstrapInFlight=true;
-  // Fetch all rows into a fresh map BEFORE touching _dbCache so that a network
-  // failure mid-load never leaves the cache in a half-empty state.
-  const fresh = {};
-  const pageSize = 1000;
-  let from = 0;
-  while(true){
-    const { data, error } = await sb
-      .from(STORE_TABLE)
-      .select("key,value")
-      .range(from, from + pageSize - 1);
-    if(error) throw error;
-    if(!data || data.length === 0) break;
-    for(const row of data) fresh[row.key] = row.value;
-    if(data.length < pageSize) break;
-    from += pageSize;
-  }
-  // Only now swap the cache — all-or-nothing, no partial wipe.
-  for(const k of Object.keys(_dbCache)) delete _dbCache[k];
-  for(const [k,v] of Object.entries(fresh)) _dbCache[k] = v;
-  // Rebuild the saves index from the lw_save_* rows we just loaded so the
-  // home screen can list everyone's reports even if a teammate saved while
-  // you were offline.
-  const idx = [];
-  for(const k of Object.keys(_dbCache)){
-    if(!k.startsWith(SAVE_PREFIX)) continue;
-    try{
-      const d = JSON.parse(_dbCache[k]);
-      if(!d) continue;
-      idx.push({
-        key: k.slice(SAVE_PREFIX.length),
-        source: d.source || null,
-        propertyName: (d.source === 'investment' ? d.investmentName : d.propertyName) || d.propertyName || d.investmentName || "Unknown",
-        quarter: d.currentQuarter || "Unknown",
-        step: d.step ?? 0,
-        savedAt: d.savedAt || ""
-      });
-    }catch(e){ /* skip malformed */ }
-  }
-  idx.sort((a,b)=>String(b.savedAt||"").localeCompare(String(a.savedAt||"")));
-  _dbCache[SAVES_INDEX_KEY] = JSON.stringify(idx);
-  _bootstrapInFlight=false;
-  if(_bootstrapRetryPending){
-    _bootstrapRetryPending=false;
-    // A second caller arrived while we were in flight — run again now that
-    // the cache is settled (e.g. TOKEN_REFRESHED fired mid-bootstrap).
-    setTimeout(()=>supaBootstrap().then(()=>{
-      state.showHome=getSavesIndex().length>0;
-      try{render();}catch(e){}
-    }).catch(e=>console.warn('Deferred bootstrap failed:',e)),50);
+  try{
+    // Fetch all rows into a fresh map BEFORE touching _dbCache so that a network
+    // failure mid-load never leaves the cache in a half-empty state.
+    const fresh = {};
+    const pageSize = 1000;
+    let from = 0;
+    while(true){
+      const { data, error } = await sb
+        .from(STORE_TABLE)
+        .select("key,value")
+        .range(from, from + pageSize - 1);
+      if(error) throw error;
+      if(!data || data.length === 0) break;
+      for(const row of data) fresh[row.key] = row.value;
+      if(data.length < pageSize) break;
+      from += pageSize;
+    }
+    // Only now swap the cache — all-or-nothing, no partial wipe.
+    for(const k of Object.keys(_dbCache)) delete _dbCache[k];
+    for(const [k,v] of Object.entries(fresh)) _dbCache[k] = v;
+    // Rebuild the saves index from the lw_save_* rows we just loaded so the
+    // home screen can list everyone's reports even if a teammate saved while
+    // you were offline.
+    const idx = [];
+    for(const k of Object.keys(_dbCache)){
+      if(!k.startsWith(SAVE_PREFIX)) continue;
+      try{
+        const d = JSON.parse(_dbCache[k]);
+        if(!d) continue;
+        idx.push({
+          key: k.slice(SAVE_PREFIX.length),
+          source: d.source || null,
+          propertyName: (d.source === 'investment' ? d.investmentName : d.propertyName) || d.propertyName || d.investmentName || "Unknown",
+          quarter: d.currentQuarter || "Unknown",
+          step: d.step ?? 0,
+          savedAt: d.savedAt || ""
+        });
+      }catch(e){ /* skip malformed */ }
+    }
+    idx.sort((a,b)=>String(b.savedAt||"").localeCompare(String(a.savedAt||"")));
+    _dbCache[SAVES_INDEX_KEY] = JSON.stringify(idx);
+  } finally {
+    // Always release the lock — even if the Supabase query threw — so that
+    // retries and TOKEN_REFRESHED re-runs are never permanently blocked.
+    _bootstrapInFlight=false;
+    if(_bootstrapRetryPending){
+      _bootstrapRetryPending=false;
+      // A second caller arrived while we were in flight — run again now that
+      // the cache is settled (e.g. TOKEN_REFRESHED fired mid-bootstrap).
+      setTimeout(()=>supaBootstrap().then(()=>{
+        state.showHome=getSavesIndex().length>0;
+        try{render();}catch(e){}
+      }).catch(e=>console.warn('Deferred bootstrap failed:',e)),50);
+    }
   }
 }
 function dbGet(k){return Object.prototype.hasOwnProperty.call(_dbCache,k)?_dbCache[k]:null;}
