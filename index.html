@@ -7181,10 +7181,15 @@ async function _bootAfterAuth(user){
   _currentUser = user;
   _authMsg('Loading your data…','info');
   try{
-    await supaBootstrap();
+    // Race the bootstrap against a 12-second timeout so a hung network request
+    // never leaves the user stuck on "Loading your data…" indefinitely.
+    await Promise.race([
+      supaBootstrap(),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('Data load timed out — check your connection and try reloading.')),12000))
+    ]);
     cleanupGarbageDbKeys(); // remove short-name photo/facts keys from prior buggy sessions
   }catch(e){
-    _authMsg('Could not load data: ' + (e && e.message || e) + '. You can still use the app, but saves may not persist.', 'error');
+    _authMsg('Could not load data: ' + (e && e.message || e) + '. You can still use the app — your saves will re-appear once the connection is restored.', 'error');
     console.error(e);
   }
   // Show the user chip in the header
