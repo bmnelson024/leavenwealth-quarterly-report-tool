@@ -7233,12 +7233,12 @@ async function authSubmit(){
     if(_authMode === 'signin'){
       const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
       if(error) throw error;
-      await _bootAfterAuth(data.user);
+      _bootAfterAuth(data.user).catch(e=>console.warn('[QRB] _bootAfterAuth error:', e));
     } else {
       const { data, error } = await sb.auth.signUp({ email, password: pw });
       if(error) throw error;
       if(data.user && data.session){
-        await _bootAfterAuth(data.user);
+        _bootAfterAuth(data.user).catch(e=>console.warn('[QRB] _bootAfterAuth error:', e));
       } else {
         // Flip back to sign-in mode (toggle-aware) so every label stays consistent,
         // then restore the "Account created" message which authToggleMode clears.
