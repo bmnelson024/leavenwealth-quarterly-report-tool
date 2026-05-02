@@ -2031,7 +2031,7 @@ async function rewriteWithClaude(kind){
             inquiries: metrics.inquiries, applications: metrics.applications,
             capex: metrics.capex||0, cashOnHand: metrics.cashOnHand||0,
             capexItems: (metrics.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount})),
-            expenseCategories: (metrics.expenseCategories||[]).map(c=>({name:c.name,amount:c.amount})),
+            expenseCategories: (metrics.expenseCategories||[]).slice(0,12).map(c=>({name:c.name,amount:c.amount})),
             // capexDetail: project-level context filtered to current quarter only.
             // topTransactions are filtered by parsed date so Claude only narrates
             // capital work that actually happened this quarter.
@@ -2076,7 +2076,7 @@ async function rewriteWithClaude(kind){
           })(),
         };
 
-    const NARRATIVE_TIMEOUT_MS = 45_000; // 45 s — Claude Sonnet is usually <15 s
+    const NARRATIVE_TIMEOUT_MS = 90_000; // 90 s — allow for cold start + Anthropic latency spikes
     const invokeResult = await Promise.race([
       sb.functions.invoke('narratives', { body: payload }),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error('Narrative rewrite timed out — Claude took too long. Try again.')), NARRATIVE_TIMEOUT_MS))
