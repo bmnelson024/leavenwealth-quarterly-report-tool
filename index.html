@@ -859,7 +859,18 @@ async function saveProgressAsync(options){
   const newWrites = [..._pendingWrites].filter(p=>!before.has(p));
   if(newWrites.length>0){
     setAutoSaveStatus('saving');
-    await Promise.allSettled(newWrites);
+    let settled = false;
+    const allDone = Promise.allSettled(newWrites).then(()=>{ settled = true; });
+    const timeout = new Promise(resolve=>setTimeout(resolve, 20_000));
+    await Promise.race([allDone, timeout]);
+    if(!settled){
+      // Large file uploads still in-flight — show toast immediately but keep
+      // the "Saving…" pill visible until the background writes complete.
+      showToast("✓ Progress saved");
+      setAutoSaveStatus('saving');
+      allDone.then(()=>setAutoSaveStatus('saved'));
+      return;
+    }
   }
   showToast("✓ Progress saved");
   setAutoSaveStatus('saved');
