@@ -2106,7 +2106,7 @@ async function rewriteWithClaude(kind){
           })(),
         };
 
-    const NARRATIVE_TIMEOUT_MS = 90_000; // 90 s — allow for cold start + Anthropic latency spikes
+    const NARRATIVE_TIMEOUT_MS = 120_000; // 120 s — edge function has its own 100 s Anthropic abort, so this is a last-resort safety net
     const invokeResult = await Promise.race([
       sb.functions.invoke('narratives', { body: payload }),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error('Narrative rewrite timed out — Claude took too long. Try again.')), NARRATIVE_TIMEOUT_MS))
