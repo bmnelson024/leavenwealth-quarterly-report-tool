@@ -2334,7 +2334,7 @@ ${(()=>{
 })()}
 ${secOn.snapshot?`<div class="page">
   <div class="pn">${prop}</div><div class="sh">Asset Overview</div>
-  ${(()=>{const af=state.assetFacts||{};const dash="—";const E=v=>escapeHtml(v||dash);return'<div class="af"><h3>Asset Facts</h3><div class="ag">'+'<div><div class="al">Units</div><div class="av">'+E(af.units)+'</div></div>'+'<div><div class="al">Square Footage</div><div class="av">'+E(af.sqft)+'</div></div>'+'<div><div class="al">Purchased</div><div class="av">'+E(af.purchased)+'</div></div>'+'<div><div class="al">Year Built</div><div class="av">'+E(af.yearBuilt)+'</div></div>'+'<div><div class="al">Address</div><div class="av">'+E(af.address)+'</div></div>'+'<div><div class="al">City / State</div><div class="av">'+E(af.cityState)+'</div></div>'+'</div></div>';})()}
+  ${(()=>{const af=state.assetFacts||{};const dash="—";const E=v=>escapeHtml(v||dash);return'<div class="af"><h3>Asset Facts</h3><div class="ag">'+'<div><div class="al">Units</div><div class="av">'+E(af.units)+'</div></div>'+(af.sqft?'<div><div class="al">Square Footage</div><div class="av">'+escapeHtml(af.sqft)+'</div></div>':'')+'<div><div class="al">Purchased</div><div class="av">'+E(af.purchased)+'</div></div>'+'<div><div class="al">Year Built</div><div class="av">'+E(af.yearBuilt)+'</div></div>'+'<div><div class="al">Address</div><div class="av">'+E(af.address)+'</div></div>'+'<div><div class="al">City / State</div><div class="av">'+E(af.cityState)+'</div></div>'+'</div></div>';})()}
   <div class="sh">Snapshot — ${qtr}</div>
   <div class="sg">
     ${_hasIncome?`<div class="sc hl"><div class="sl">Total Income</div><div class="sv">${fmtWhole(m.totalIncome)}</div></div>`:""}
