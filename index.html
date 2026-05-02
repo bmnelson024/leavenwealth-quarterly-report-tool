@@ -832,7 +832,8 @@ function saveProgress(options){
     idx.unshift({key,source:state.source,propertyName:propName,quarter:state.currentQuarter||"Unknown",step:state.step,savedAt:data.savedAt});
     dbSet(SAVES_INDEX_KEY,JSON.stringify(idx),onPersistErr);
     state._savedThisStep=true;
-    if(silent) setAutoSaveStatus('saved');
+    if(options._noFeedback){ /* saveProgressAsync handles feedback after writes settle */ }
+    else if(silent) setAutoSaveStatus('saved');
     else showToast("✓ Progress saved");
     return true;
   }catch(e){
@@ -840,6 +841,27 @@ function saveProgress(options){
     else showError("Could not save progress: "+(e&&e.message||"unknown error"));
     return false;
   }
+}
+// Async wrapper for the Save button: defers the success toast until Supabase
+// actually confirms the write, so the user knows it's safe to refresh.
+// Validation errors (no name, no quarter, etc.) still surface immediately as
+// blocking dialogs because we don't pass silent:true here.
+async function saveProgressAsync(options){
+  options = options || {};
+  // Snapshot writes already in-flight BEFORE this save kicks off new ones
+  const before = new Set(_pendingWrites);
+  // Run the synchronous save; pass _noFeedback so saveProgress doesn't show
+  // a premature "✓ saved" toast — we'll show it ourselves after writes settle.
+  const ok = saveProgress({...options, _noFeedback:true});
+  if(!ok) return;
+  // Collect only the writes this save triggered (not pre-existing in-flight ones)
+  const newWrites = [..._pendingWrites].filter(p=>!before.has(p));
+  if(newWrites.length>0){
+    setAutoSaveStatus('saving');
+    await Promise.allSettled(newWrites);
+  }
+  showToast("✓ Progress saved");
+  setAutoSaveStatus('saved');
 }
 // Cheap per-file hash: concatenates key + byte length so an unchanged file
 // set produces an identical string and we can skip re-uploading it.
@@ -899,7 +921,15 @@ function autoSaveNow(){
 // Best-effort flush on page unload. Browser won't wait for the network round
 // trip, but dbSet fires the Supabase request synchronously so it usually makes
 // it onto the wire before the tab closes.
-function flushAutoSaveOnUnload(){
+function flushAutoSaveOnUnload(e){
+  // Block the page unload if Supabase writes are still in-flight so the user
+  // can't accidentally refresh before their save lands in the cloud.
+  if(e && _pendingWrites.size>0){
+    e.preventDefault();
+    e.returnValue='Your report is still saving to the cloud — please wait a moment before refreshing.';
+    return e.returnValue;
+  }
+  // Flush any pending debounced autosave that hasn't fired yet
   if(_autoSaveTimer){
     clearTimeout(_autoSaveTimer);
     _autoSaveTimer = null;
@@ -1131,7 +1161,7 @@ function showSavePrompt(onContinue){
   }
   m.classList.add("show");
   const close=()=>m.classList.remove("show");
-  document.getElementById("lw-sm-save").onclick=()=>{close();saveProgress();onContinue();};
+  document.getElementById("lw-sm-save").onclick=async()=>{close();await saveProgressAsync();onContinue();};
   document.getElementById("lw-sm-skip").onclick=()=>{close();onContinue();};
   m.onclick=e=>{if(e.target===m){close();}};
 }
@@ -4688,7 +4718,7 @@ function renderInvestmentStep0(){
       <button onclick="addBgChampionChart()" style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:6px;font-size:12px;font-weight:600;padding:6px 14px;cursor:pointer">+ Upload Chart (PNG/JPG)</button>
     </div>
     <div class="btn-row" style="margin-top:16px">
-      <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+      <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
       <button class="process-btn" style="flex:2;margin:0" ${anyPropWorkable?"":"disabled"} onclick="processInvestmentData()">Process Investment Data →</button>
     </div>`;
 }
@@ -5149,7 +5179,7 @@ function renderVestmintStep2(){
 
     <div class="btn-row">
       <button class="btn-back" onclick="state.step=1;render()">← Back</button>
-      <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+      <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
       <button class="gen-btn btn-next" style="flex:2" onclick="confirmAndGenerateVestmint()">🖨️ Generate VestMint Fund Report</button>
     </div>`;
 }
@@ -6611,7 +6641,7 @@ function render(){
         </div>
         <div class="btn-row">
           <button class="btn-back" onclick="state.step=0;render()">← Back</button>
-          <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+          <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
           <button class="btn-next" onclick="confirmAndAdvance(2)">Looks Good → Review Narratives</button>
         </div>`;
       return;
@@ -6659,7 +6689,7 @@ function render(){
         </div>
         <div class="btn-row">
           <button class="btn-back" onclick="state.step=1;render()">← Back</button>
-          <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+          <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
           <button class="gen-btn btn-next" style="flex:2" onclick="confirmAndGenerateInv()">🖨️ Generate Investment Report</button>
         </div>`;
       return;
@@ -6673,7 +6703,7 @@ function render(){
           <div style="display:flex;gap:8px">
             ${_hasSaves?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
             <button class="btn-back" onclick="state.invReportHTML=null;render()">← Edit</button>
-            <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+            <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
             <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="(function(){const fr=document.getElementById('inv-print-frame');if(fr&&fr.contentWindow){fr.contentWindow.focus();fr.contentWindow.print();}})()">🖨️ Print / Save PDF</button>
           </div>
         </div>
@@ -6749,7 +6779,7 @@ function render(){
         </div>
         <div class="btn-row">
           <button class="btn-back" onclick="state.step=0;render()">← Back</button>
-          <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+          <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
           <button class="btn-next" onclick="confirmAndAdvance(2)">Looks Good → Review Narratives</button>
         </div>`;
       return;
@@ -6771,7 +6801,7 @@ function render(){
           <div style="display:flex;gap:8px">
             ${_hasSaves?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
             <button class="btn-back" onclick="state.vmReportHTML=null;render()">← Edit</button>
-            <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+            <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
             <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="(function(){const fr=document.getElementById('vm-print-frame');if(fr&&fr.contentWindow){fr.contentWindow.focus();fr.contentWindow.print();}})()">🖨️ Print / Save PDF</button>
           </div>
         </div>
@@ -7041,7 +7071,7 @@ function render(){
       ${fileRow("rentEngine","Leasing Data — Property Performance",`${state.propertyName||"Property"}, ${state.currentQuarter||""}`,'text')}
       ${cashOnHandBox}${loanBox}${econBox}${chartsSection}
       <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="save-btn" style="flex:0 0 auto" onclick="saveProgress({allowEmpty:true})">💾 Save</button>
+        <button class="save-btn" style="flex:0 0 auto" onclick="saveProgressAsync({allowEmpty:true})">💾 Save</button>
         <button class="process-btn" style="flex:1;margin:0" onclick="processDataWithConfirm()">Process Data →</button>
       </div>`;
     } else {
@@ -7063,7 +7093,7 @@ function render(){
       ${fileRow("capexDetail","Capital Expense Report <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","12-month cash flow or capital expense export — used to identify remodeled units and capex detail",'auto')}
       ${cashOnHandBox}${loanBox}${econBox}${chartsSection}
       <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="save-btn" style="flex:0 0 auto" onclick="saveProgress({allowEmpty:true})">💾 Save</button>
+        <button class="save-btn" style="flex:0 0 auto" onclick="saveProgressAsync({allowEmpty:true})">💾 Save</button>
         <button class="process-btn" style="flex:1;margin:0" onclick="processDataWithConfirm()">Process Data →</button>
       </div>`;
     }
@@ -7150,7 +7180,7 @@ function render(){
       })()}
       <div class="btn-row">
         <button class="btn-back" onclick="state.step=0;render()">← Back</button>
-        <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+        <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
         <button class="btn-next" onclick="confirmAndAdvance(2)">Looks Good → Review Narratives</button>
       </div>`;
   }
@@ -7174,7 +7204,7 @@ function render(){
       <div class="charts-info">📊 <strong>${chartsN}/11 charts uploaded</strong> — ${chartsN===11?"All charts ready!":"Missing charts will show placeholders."}</div>
       <div class="btn-row">
         <button class="btn-back" onclick="state.step=1;render()">← Back</button>
-        <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+        <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
         <button class="gen-btn btn-next" style="flex:2" ${state.generating?"disabled":""} onclick="confirmAndGenerate()">
           ${state.generating?`<span class="spinner"></span> Building Report...`:"🖨️ Generate Report"}
         </button>
@@ -7190,7 +7220,7 @@ function render(){
         <div style="display:flex;gap:8px">
           ${_hasSaves?`<button class="btn-home" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
           <button class="btn-back" style="white-space:nowrap" onclick="state.reportHTML=null;render()">← Edit</button>
-          <button class="save-btn" onclick="saveProgress()">💾 Save</button>
+          <button class="save-btn" onclick="saveProgressAsync()">💾 Save</button>
           <button class="btn-next" style="flex:none;padding:8px 16px;font-size:13px" onclick="printReport()">🖨️ Print / Save PDF</button>
         </div>
       </div>
