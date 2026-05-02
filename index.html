@@ -602,13 +602,13 @@ let state = _makeDefaultState();
 // ─── SAVE / RESUME ───────────────────────────────────────────────────────────
 function getSavesIndex(){try{return JSON.parse(dbGet(SAVES_INDEX_KEY)||"[]");}catch(e){return[];}}
 function saveKey(name,quarter){return(name+"_"+quarter).replace(/['''ʼ]/g,"").replace(/[^a-z0-9]/gi,"_").toLowerCase();}
-function saveChartsForKey(k,charts){if(!k)return;dbSet(CHARTS_PREFIX+k,JSON.stringify(charts));}
+function saveChartsForKey(k,charts,onErr){if(!k)return;dbSet(CHARTS_PREFIX+k,JSON.stringify(charts),onErr);}
 function loadChartsForKey(k){if(!k)return null;try{const d=dbGet(CHARTS_PREFIX+k);return d?JSON.parse(d):null;}catch(e){return null;}}
-function saveInvChartsForKey(k,charts){if(!k)return;dbSet(INV_CHARTS_PREFIX+k,JSON.stringify(charts));}
+function saveInvChartsForKey(k,charts,onErr){if(!k)return;dbSet(INV_CHARTS_PREFIX+k,JSON.stringify(charts),onErr);}
 function loadInvChartsForKey(k){if(!k)return null;try{const d=dbGet(INV_CHARTS_PREFIX+k);return d?JSON.parse(d):null;}catch(e){return null;}}
-function saveBgChampionChartsForKey(k,charts){if(!k)return;dbSet(BG_CHAMPION_CHARTS_PREFIX+k,JSON.stringify(charts));}
+function saveBgChampionChartsForKey(k,charts,onErr){if(!k)return;dbSet(BG_CHAMPION_CHARTS_PREFIX+k,JSON.stringify(charts),onErr);}
 function loadBgChampionChartsForKey(k){if(!k)return[];try{const d=dbGet(BG_CHAMPION_CHARTS_PREFIX+k);return d?JSON.parse(d):[];}catch(e){return[];}}
-function saveVestmintFinancialsForKey(k,pages){if(!k)return;dbSet(VESTMINT_FINANCIALS_PREFIX+k,JSON.stringify(pages));}
+function saveVestmintFinancialsForKey(k,pages,onErr){if(!k)return;dbSet(VESTMINT_FINANCIALS_PREFIX+k,JSON.stringify(pages),onErr);}
 function loadVestmintFinancialsForKey(k){if(!k)return[];try{const d=dbGet(VESTMINT_FINANCIALS_PREFIX+k);return d?JSON.parse(d):[];}catch(e){return[];}}
 // ── File persistence helpers ─────────────────────────────────────────────────
 // ArrayBuffers (Excel files) are serialized to base64; strings (CSVs) stored as-is.
@@ -616,9 +616,9 @@ function _bufToB64(buf){const b=new Uint8Array(buf);let s='';const c=8192;for(le
 function _b64ToBuf(b64){const b=atob(b64);const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a.buffer;}
 function _serializeFiles(files){if(!files)return null;const out={};Object.entries(files).forEach(([k,v])=>{if(!v)out[k]=null;else if(v instanceof ArrayBuffer)out[k]={t:'buf',d:_bufToB64(v)};else out[k]={t:'str',d:v};});return out;}
 function _deserializeFiles(ser){if(!ser)return null;const out={};Object.entries(ser).forEach(([k,v])=>{if(!v)out[k]=null;else if(v.t==='buf')out[k]=_b64ToBuf(v.d);else out[k]=v.d;});return out;}
-function saveFilesForKey(k,files){if(!k)return;try{dbSet(FILES_PREFIX+k,JSON.stringify(_serializeFiles(files)));}catch(e){console.warn('File save failed:',e);}}
+function saveFilesForKey(k,files,onErr){if(!k)return;try{dbSet(FILES_PREFIX+k,JSON.stringify(_serializeFiles(files)),onErr);}catch(e){console.warn('File save failed:',e);if(typeof onErr==='function')onErr(e);}}
 function loadFilesForKey(k){if(!k)return null;try{const d=dbGet(FILES_PREFIX+k);return d?_deserializeFiles(JSON.parse(d)):null;}catch(e){return null;}}
-function saveInvFilesForKey(k,props){if(!k)return;try{const out={};(props||[]).forEach(p=>{if(p.files)out[p.id]=_serializeFiles(p.files);});dbSet(INV_FILES_PREFIX+k,JSON.stringify(out));}catch(e){console.warn('Inv file save failed:',e);}}
+function saveInvFilesForKey(k,props,onErr){if(!k)return;try{const out={};(props||[]).forEach(p=>{if(p.files)out[p.id]=_serializeFiles(p.files);});dbSet(INV_FILES_PREFIX+k,JSON.stringify(out),onErr);}catch(e){console.warn('Inv file save failed:',e);if(typeof onErr==='function')onErr(e);}}
 function loadInvFilesForKey(k){if(!k)return{};try{const d=dbGet(INV_FILES_PREFIX+k);return d?JSON.parse(d):{};}catch(e){return{};}}
 function applyInvFiles(props,serialized){(props||[]).forEach(p=>{const s=serialized[p.id];if(s)p.files={...(p.files||{}),..._deserializeFiles(s)};});}
 // Current save key for the active report
@@ -805,28 +805,29 @@ function saveProgress(options){
     savedAt:new Date().toISOString()
   };
   try{
-    // Save charts and files — dedupe file blobs so autosaves don't re-upload
-    // the same multi-MB spreadsheet when only metadata changed.
-    const filesHash = _hashFileSet(isInv ? state.invProperties : state.files, isInv);
-    const filesChanged = filesHash !== _lastFilesHashByKey[key];
-    if(isInv){
-      saveInvChartsForKey(key,state.invCharts);
-      saveBgChampionChartsForKey(key,(state.bgChampionCustom&&state.bgChampionCustom.charts)||[]);
-      if(filesChanged) saveInvFilesForKey(key,state.invProperties);
-      if(state.source==='vestmint') saveVestmintFinancialsForKey(key,state.vestmintFinancials||[]);
-    } else {
-      saveChartsForKey(key,state.charts);
-      if(filesChanged) saveFilesForKey(key,state.files);
-    }
-    if(filesChanged) _lastFilesHashByKey[key] = filesHash;
     // Surface async Supabase write failures (network, auth expiry, RLS rejection)
     // so silent data loss doesn't happen. In silent (autosave) mode we surface
     // via the autosave status indicator instead of a blocking error box.
+    // Defined first so it can be passed to chart/file saves as well as the main save.
     const onPersistErr=err=>{
       const msg="Could not save to cloud: "+(err&&err.message||"unknown error")+". Check your connection or try signing out and back in.";
       if(silent) setAutoSaveStatus('error', 'Save failed — check connection');
       else showError(msg);
     };
+    // Save charts and files — dedupe file blobs so autosaves don't re-upload
+    // the same multi-MB spreadsheet when only metadata changed.
+    const filesHash = _hashFileSet(isInv ? state.invProperties : state.files, isInv);
+    const filesChanged = filesHash !== _lastFilesHashByKey[key];
+    if(isInv){
+      saveInvChartsForKey(key,state.invCharts,onPersistErr);
+      saveBgChampionChartsForKey(key,(state.bgChampionCustom&&state.bgChampionCustom.charts)||[],onPersistErr);
+      if(filesChanged) saveInvFilesForKey(key,state.invProperties,onPersistErr);
+      if(state.source==='vestmint') saveVestmintFinancialsForKey(key,state.vestmintFinancials||[],onPersistErr);
+    } else {
+      saveChartsForKey(key,state.charts,onPersistErr);
+      if(filesChanged) saveFilesForKey(key,state.files,onPersistErr);
+    }
+    if(filesChanged) _lastFilesHashByKey[key] = filesHash;
     dbSet(SAVE_PREFIX+key,JSON.stringify(data),onPersistErr);
     const idx=getSavesIndex().filter(s=>s.key!==key);
     idx.unshift({key,source:state.source,propertyName:propName,quarter:state.currentQuarter||"Unknown",step:state.step,savedAt:data.savedAt});
