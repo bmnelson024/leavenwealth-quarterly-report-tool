@@ -611,6 +611,8 @@ function _makeDefaultState(){
     vestmintOtherAssets: [],    // [{id, name, pages:[]}] — dynamically added investment sections (pages = data URL arrays from uploaded PDFs)
     vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
     vestmintHasProForma: true,
+    vestmintBpGreenway: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', locLimit:'', locDrawn:'', locRemaining:'', narrative:'' },
+    vestmintBpBrentVillage: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', locLimit:'', locDrawn:'', locRemaining:'', narrative:'' },
     vmReportHTML: null,
     hasProForma: true,      // show "vs. Pro Forma" in single-property chart labels?
     rewritingClaude: false, // true while the Claude narrative rewrite is in-flight
@@ -822,6 +824,8 @@ function saveProgress(options){
     vestmintOtherAssets:(state.vestmintOtherAssets||[]).map(a=>({id:a.id,name:a.name})),
     vestmintSections:state.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
     vestmintHasProForma:state.vestmintHasProForma!==false,
+    vestmintBpGreenway:state.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
+    vestmintBpBrentVillage:state.vestmintBpBrentVillage||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
     narrativesEdited:!!state.narrativesEdited,
     invNarrativesEdited:!!state.invNarrativesEdited,
     savedAt:new Date().toISOString()
@@ -1054,6 +1058,8 @@ async function loadSave(key){
       vestmintOtherAssets:(data.vestmintOtherAssets||[]).map(a=>({...a, pages:loadVestmintOtherAssetPagesForKey(key,a.id)})),
       vestmintSections:data.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
       vestmintHasProForma:data.vestmintHasProForma!==false,
+      vestmintBpGreenway:data.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
+      vestmintBpBrentVillage:data.vestmintBpBrentVillage||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
       vmReportHTML:null,
       invReportHTML:null,
       // Reset transient UI flags — these are never saved and must not bleed across sessions
@@ -1292,6 +1298,8 @@ function selectSource(src){
   state.vestmintOtherAssets = [];
   state.vestmintSections = {fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true};
   state.vestmintHasProForma = true;
+  state.vestmintBpGreenway = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''};
+  state.vestmintBpBrentVillage = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''};
   state.vmReportHTML = null;
   render();
 }
@@ -4096,6 +4104,125 @@ ${sec.leasingSection?`
 </div>
 </body></html>`;
 }
+// ─── VESTMINT FUND — BUSINESS PLAN PAGE BUILDER ──────────────────────────────
+// Renders one Business Plan Status page for a Vestmint sub-portfolio (e.g. Greenway, Brent Village).
+// bp  = state.vestmintBpGreenway or state.vestmintBpBrentVillage
+// label = display name for this group (e.g. "Greenway 1 & 2")
+function buildVmBpPage(bp, label, qtr, inv, pg){
+  if(!bp||!bp.enabled) return '';
+  const comp=parseInt(bp.unitsCompleted)||0;
+  const rem=parseInt(bp.unitsRemaining)||0;
+  const total=comp+rem;
+  const unitsPct=total>0?Math.min(100,Math.round(comp/total*100)):0;
+  const budget=parseFloat(String(bp.totalBudget||"0").replace(/[$,]/g,""))||0;
+  const spent=parseFloat(String(bp.spentToDate||"0").replace(/[$,]/g,""))||0;
+  const budgetPct=budget>0?Math.min(100,Math.round(spent/budget*100)):0;
+  const remaining=budget>0?budget-spent:0;
+  const locLimit=parseFloat(String(bp.locLimit||"0").replace(/[$,]/g,""))||0;
+  const locDrawn=parseFloat(String(bp.locDrawn||"0").replace(/[$,]/g,""))||0;
+  const locRemaining=parseFloat(String(bp.locRemaining||"0").replace(/[$,]/g,""))||Math.max(0,locLimit-locDrawn)||0;
+  const hasLoc=locLimit>0||locDrawn>0;
+  const hasProgress=total>0||comp>0;
+  const hasBudget=budget>0||spent>0;
+  const hasNarrative=!!(bp.narrative&&bp.narrative.trim());
+  const r=58,circ=+(2*Math.PI*r).toFixed(2);
+  const arc=total>0?+((unitsPct/100)*circ).toFixed(2):0;
+  const donut=total>0?`<svg viewBox="0 0 150 150" width="150" height="150" style="flex-shrink:0;display:block">
+    <circle cx="75" cy="75" r="${r}" fill="none" stroke="#e5e7eb" stroke-width="14"/>
+    <circle cx="75" cy="75" r="${r}" fill="none" stroke="#00c48c" stroke-width="14"
+      stroke-dasharray="${arc} ${circ}" stroke-linecap="round" transform="rotate(-90 75 75)"/>
+    <text x="75" y="70" text-anchor="middle" font-family="sans-serif" font-size="28" font-weight="700" fill="#1a3a35">${unitsPct}%</text>
+    <text x="75" y="91" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5a8070">${comp} of ${total} units</text>
+  </svg>`:'';
+  const delta=(budget>0&&total>0)?budgetPct-unitsPct:null;
+  return `
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
+  <div class="sh2">${escapeHtml(label)}</div>
+  ${hasProgress?`
+  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px;font-family:sans-serif;">Remodel Progress</div>
+  <div style="display:flex;gap:24px;align-items:center;margin-bottom:20px;font-family:sans-serif;">
+    <div style="flex:1">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
+          <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Completed</div>
+          <div style="font-size:34px;font-weight:700;color:white">${comp||"—"}</div>
+        </div>
+        <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;text-align:center;">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Units Remaining</div>
+          <div style="font-size:34px;font-weight:700;color:var(--dark)">${rem||"—"}</div>
+        </div>
+      </div>
+      ${total>0?`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px"><span>Remodel completion</span><span>${unitsPct}% (${comp} of ${total} units)</span></div>
+      <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+        <div style="height:100%;width:${unitsPct}%;background:var(--teal);border-radius:4px;"></div>
+      </div>`:''}
+    </div>
+    ${donut}
+  </div>`:''}
+  ${hasBudget?`
+  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px;font-family:sans-serif;">Budget vs. Actual</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;font-family:sans-serif;">
+    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Total Budget</div>
+      <div style="font-size:20px;font-weight:700;color:var(--dark)">${budget>0?'$'+budget.toLocaleString():"—"}</div>
+    </div>
+    <div style="background:var(--dark);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Spent to Date</div>
+      <div style="font-size:20px;font-weight:700;color:white">${spent>0?'$'+spent.toLocaleString():"—"}</div>
+    </div>
+    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Remaining</div>
+      <div style="font-size:20px;font-weight:700;color:var(--dark)">${budget>0?'$'+remaining.toLocaleString():"—"}</div>
+    </div>
+  </div>
+  ${budget>0&&total>0?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;font-family:sans-serif;">
+    <div style="background:#f9fffe;border:1px solid #c8e6de;border-radius:8px;padding:12px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Budget Spent</div>
+        <div style="font-size:18px;font-weight:700;color:var(--dark)">${budgetPct}%</div>
+      </div>
+      <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+        <div style="height:100%;width:${budgetPct}%;background:var(--teal);border-radius:4px;"></div>
+      </div>
+    </div>
+    <div style="background:#f9fffe;border:1px solid #c8e6de;border-radius:8px;padding:12px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Units Complete</div>
+        <div style="font-size:18px;font-weight:700;color:var(--dark)">${unitsPct}%</div>
+      </div>
+      <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+        <div style="height:100%;width:${unitsPct}%;background:#00c48c;border-radius:4px;"></div>
+      </div>
+    </div>
+  </div>
+  ${delta!==null?`<div style="font-size:10px;color:${Math.abs(delta)<=5?'#166534':delta>5?'#92400e':'#1e40af'};background:${Math.abs(delta)<=5?'#f0fdf4':delta>5?'#fffbeb':'#eff6ff'};border-radius:6px;padding:7px 12px;margin-bottom:14px;text-align:center;font-family:sans-serif;">${Math.abs(delta)<=5?`Budget spend and unit completion are well aligned (${budgetPct}% spent / ${unitsPct}% complete)`:delta>5?`Spending is running ${delta}pp ahead of unit completion (${budgetPct}% spent / ${unitsPct}% complete)`:`Unit completion is running ${Math.abs(delta)}pp ahead of spend (${unitsPct}% complete / ${budgetPct}% spent)`}</div>`:''}`:budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-family:sans-serif"><span>Budget utilization</span><span>${budgetPct}%</span></div>
+  <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
+    <div style="height:100%;width:${budgetPct}%;background:var(--teal);border-radius:5px;"></div>
+  </div>`:""}
+  `:''}
+  ${hasLoc?`
+  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px;font-family:sans-serif;">Line of Credit Status</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;font-family:sans-serif;">
+    <div style="background:var(--teal-light);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">LOC Limit</div>
+      <div style="font-size:18px;font-weight:700;color:var(--dark)">${locLimit>0?'$'+locLimit.toLocaleString():"—"}</div>
+    </div>
+    <div style="background:var(--dark);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Drawn to Date</div>
+      <div style="font-size:18px;font-weight:700;color:white">${locDrawn>0?'$'+locDrawn.toLocaleString():"—"}</div>
+    </div>
+    <div style="background:var(--teal-light);border-radius:8px;padding:12px 14px;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Remaining Available</div>
+      <div style="font-size:18px;font-weight:700;color:var(--dark)">${locRemaining>0?'$'+locRemaining.toLocaleString():"—"}</div>
+    </div>
+  </div>`:''}
+  ${hasNarrative?`<div class="sh2">Business Plan Narrative</div>
+  <div class="ns"><p class="nt">${escapeHtml(bp.narrative).replace(/\n/g,'<br>')}</p></div>`:""}
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`;
+}
+
 // ─── VESTMINT FUND REPORT BUILDER ────────────────────────────────────────────
 function buildVestmintReport(m,n,invName,quarter,sections){
   const sec={fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true,...(sections||{})};
@@ -4266,6 +4393,9 @@ ${summaryOverflow&&n.outlook?`<div class="page">
   </tbody></table>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>
+<!-- BUSINESS PLAN PAGES -->
+${buildVmBpPage(state.vestmintBpGreenway||{}, 'Greenway 1 & 2', qtr, inv, pg)}
+${buildVmBpPage(state.vestmintBpBrentVillage||{}, 'Brent Village', qtr, inv, pg)}
 <!-- FINANCIAL CHARTS -->
 ${sec.financialCharts?`
 <div class="page">
@@ -5218,6 +5348,69 @@ function renderVestmintStep2(){
         style="width:100%;min-height:100px;padding:10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;box-sizing:border-box;background:white;outline:none"
       >${state.vestmintFundOverview||""}</div>
     </div>
+
+    ${(()=>{
+      // ── Business Plan sections ──────────────────────────────────────────────
+      function _vmBpSection(bpKey, sectionLabel){
+        const bp=state[bpKey]||{};
+        const set=(field,val)=>`(function(){state['${bpKey}']['${field}']=this.value;})()`; // unused helper kept for clarity
+        return `<div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
+          <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🏗️ Business Plan — ${escapeHtml(sectionLabel)}</div>
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:${bp.enabled?'14px':'0'}">
+            <input type="checkbox" ${bp.enabled?"checked":""} onchange="state['${bpKey}'].enabled=this.checked;_refreshVestmintReportHTML();render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
+            <div>
+              <div style="font-size:13px;font-weight:600;color:#1a3a35">Enable Business Plan page for ${escapeHtml(sectionLabel)}</div>
+              <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a page with remodel progress, budget vs. actual, LOC status, and narrative</div>
+            </div>
+          </label>
+          ${bp.enabled?`
+          <div style="border-top:1px solid #c8e6de;padding-top:14px">
+            <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Completed</label>
+                <input type="number" min="0" placeholder="e.g. 24" value="${escapeHtml(bp.unitsCompleted||'')}"
+                  oninput="state['${bpKey}'].unitsCompleted=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Remaining</label>
+                <input type="number" min="0" placeholder="e.g. 12" value="${escapeHtml(bp.unitsRemaining||'')}"
+                  oninput="state['${bpKey}'].unitsRemaining=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Budget vs. Actual</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Total Remodel Budget</label>
+                <input type="text" placeholder="e.g. 1,800,000" value="${escapeHtml(bp.totalBudget||'')}"
+                  oninput="state['${bpKey}'].totalBudget=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Amount Spent to Date</label>
+                <input type="text" placeholder="e.g. 960,000" value="${escapeHtml(bp.spentToDate||'')}"
+                  oninput="state['${bpKey}'].spentToDate=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Line of Credit</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">LOC Limit</label>
+                <input type="text" placeholder="e.g. 2,500,000" value="${escapeHtml(bp.locLimit||'')}"
+                  oninput="state['${bpKey}'].locLimit=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Drawn to Date</label>
+                <input type="text" placeholder="e.g. 1,200,000" value="${escapeHtml(bp.locDrawn||'')}"
+                  oninput="state['${bpKey}'].locDrawn=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Remaining Available</label>
+                <input type="text" placeholder="auto-calculated" value="${escapeHtml(bp.locRemaining||'')}"
+                  oninput="state['${bpKey}'].locRemaining=this.value;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Narrative <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af">(optional)</span></div>
+            <textarea rows="4" placeholder="Describe remodel progress, key milestones, and outlook for ${escapeHtml(sectionLabel)}…"
+              oninput="state['${bpKey}'].narrative=this.value;_refreshVestmintReportHTML()"
+              style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;resize:vertical;box-sizing:border-box">${escapeHtml(bp.narrative||'')}</textarea>
+          </div>`:''}
+        </div>`;
+      }
+      return _vmBpSection('vestmintBpGreenway','Greenway 1 & 2')+_vmBpSection('vestmintBpBrentVillage','Brent Village');
+    })()}
 
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
