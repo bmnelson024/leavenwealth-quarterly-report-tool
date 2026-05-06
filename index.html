@@ -441,7 +441,13 @@ function dbSet(k,v,onError){
     if(typeof onError==='function') try{onError(err);}catch(e){}
   });
   _pendingWrites.add(p);
-  p.finally(()=>_pendingWrites.delete(p));
+  // Keep the status indicator honest — show "Saving…" for any in-flight write
+  // (charts, files, asset facts, etc.) so the user knows not to navigate away.
+  setAutoSaveStatus('saving');
+  p.finally(()=>{
+    _pendingWrites.delete(p);
+    if(_pendingWrites.size===0) setAutoSaveStatus('saved');
+  });
 }
 function dbRemove(k){
   delete _dbCache[k];
@@ -843,37 +849,21 @@ function saveProgress(options){
     return false;
   }
 }
-// Async wrapper for the Save button: defers the success toast until Supabase
-// actually confirms the write, so the user knows it's safe to refresh.
-// Validation errors (no name, no quarter, etc.) still surface immediately as
-// blocking dialogs because we don't pass silent:true here.
+// Async wrapper for the Save button. Fires the synchronous save (which starts
+// Supabase writes in the background), waits a short beat so the main data blob
+// has time to land, then shows the toast. The status pill ("Saving…" / "✓ Saved")
+// is now driven entirely by dbSet / dbSet.finally — no need to manage it here.
+// The beforeunload guard warns the user if they try to navigate away while large
+// file uploads are still in-flight.
 async function saveProgressAsync(options){
   options = options || {};
-  // Snapshot writes already in-flight BEFORE this save kicks off new ones
-  const before = new Set(_pendingWrites);
-  // Run the synchronous save; pass _noFeedback so saveProgress doesn't show
-  // a premature "✓ saved" toast — we'll show it ourselves after writes settle.
   const ok = saveProgress({...options, _noFeedback:true});
   if(!ok) return;
-  // Collect only the writes this save triggered (not pre-existing in-flight ones)
-  const newWrites = [..._pendingWrites].filter(p=>!before.has(p));
-  if(newWrites.length>0){
-    setAutoSaveStatus('saving');
-    let settled = false;
-    const allDone = Promise.allSettled(newWrites).then(()=>{ settled = true; });
-    const timeout = new Promise(resolve=>setTimeout(resolve, 20_000));
-    await Promise.race([allDone, timeout]);
-    if(!settled){
-      // Large file uploads still in-flight — show toast immediately but keep
-      // the "Saving…" pill visible until the background writes complete.
-      showToast("✓ Progress saved");
-      setAutoSaveStatus('saving');
-      allDone.then(()=>setAutoSaveStatus('saved'));
-      return;
-    }
-  }
+  // Brief pause — enough for the main data blob (<100 KB) to settle on a normal
+  // connection while keeping the UX snappy. Large chart/file uploads finish in
+  // the background; the pill stays on "Saving…" until they complete.
+  await new Promise(resolve=>setTimeout(resolve, 800));
   showToast("✓ Progress saved");
-  setAutoSaveStatus('saved');
 }
 // Cheap per-file hash: concatenates key + byte length so an unchanged file
 // set produces an identical string and we can skip re-uploading it.
@@ -1009,7 +999,9 @@ async function loadSave(key){
       propertyName:data.propertyName||"", currentQuarter:data.currentQuarter||"",
       prevQuarterLabel:data.prevQuarterLabel||"",
       prevMetrics:restoredPrevMetrics,
-      assetFacts:data.assetFacts||null, econOcc:data.econOcc||{m1:"",m2:"",m3:""},
+      // Merge lw_assetfacts_ over the main blob so fields saved after the last
+      // autosave (e.g. yearBuilt / purchased typed late) are never lost on resume.
+      assetFacts:(()=>{const b=data.assetFacts||null;const k=loadAssetFactsForProperty(data.propertyName||'');return(b||k)?{...(b||{}),  ...(k||{})}:null;})(), econOcc:data.econOcc||{m1:"",m2:"",m3:""},
       prevOccupancyInput:data.prevOccupancyInput||"",
       isInceptionReport:data.isInceptionReport||false,
       cashOnHandInput:data.cashOnHandInput||"",
@@ -5890,6 +5882,7 @@ function loadAssetFactsForProperty(name){
 function onAssetFactChange(field, val){
   state.assetFacts = {...(state.assetFacts||{}), [field]: val};
   saveAssetFacts(state.propertyName, state.assetFacts);
+  scheduleAutoSave(); // ensure main save blob stays in sync with lw_assetfacts_
 }
 // ─── 12-MONTH INCOME STATEMENT PARSERS ────────────────────────────────────────
 // parseQuarterFromExcel: Reads a 12-month AppFolio income statement and returns
@@ -7019,7 +7012,7 @@ function render(){
               <div class="econ-input-wrap">
                 <input class="econ-input" type="number" min="0" max="100" placeholder="e.g. 87"
                   value="${state.econOcc[k]}"
-                  oninput="state.econOcc['${k}']=this.value;document.getElementById('econ-avg-el').textContent=calcEconAvg()"/>
+                  oninput="state.econOcc['${k}']=this.value;document.getElementById('econ-avg-el').textContent=calcEconAvg();scheduleAutoSave()"/>
                 <span class="econ-pct">%</span>
               </div>
             </div>`).join("")}
