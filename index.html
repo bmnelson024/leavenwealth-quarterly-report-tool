@@ -864,6 +864,7 @@ async function saveProgressAsync(options){
   // the background; the pill stays on "Saving…" until they complete.
   await new Promise(resolve=>setTimeout(resolve, 800));
   showToast("✓ Progress saved");
+  setAutoSaveStatus('saved');
 }
 // Cheap per-file hash: concatenates key + byte length so an unchanged file
 // set produces an identical string and we can skip re-uploading it.
@@ -924,18 +925,21 @@ function autoSaveNow(){
 // trip, but dbSet fires the Supabase request synchronously so it usually makes
 // it onto the wire before the tab closes.
 function flushAutoSaveOnUnload(e){
-  // Block the page unload if Supabase writes are still in-flight so the user
-  // can't accidentally refresh before their save lands in the cloud.
-  if(e && _pendingWrites.size>0){
-    e.preventDefault();
-    e.returnValue='Your report is still saving to the cloud — please wait a moment before refreshing.';
-    return e.returnValue;
-  }
-  // Flush any pending debounced autosave that hasn't fired yet
+  // Flush any pending debounced autosave FIRST — this captures the very latest
+  // state (e.g. econOcc values or chart uploads made after the last explicit save)
+  // and adds those writes to _pendingWrites before the size check below.
+  // This must run unconditionally, even when other writes are already in-flight.
   if(_autoSaveTimer){
     clearTimeout(_autoSaveTimer);
     _autoSaveTimer = null;
     if(canAutoSave()) saveProgress({silent:true, allowEmpty:true});
+  }
+  // Now block the page unload if any Supabase writes are still in-flight
+  // (including the ones we may have just added above).
+  if(e && _pendingWrites.size>0){
+    e.preventDefault();
+    e.returnValue='Your report is still saving to the cloud — please wait a moment before refreshing.';
+    return e.returnValue;
   }
 }
 // Status indicator — injected once on first use, then just updated in place.
@@ -5293,7 +5297,20 @@ function loadChart(key){
   inp.onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader();
-    r.onload=ev=>{ state.charts[key]=ev.target.result; saveChartsForKey(currentSaveKey(),state.charts); _refreshReportHTML(); render(); };
+    r.onload=ev=>{
+      state.charts[key]=ev.target.result;
+      // Warn if the combined chart blob is getting large — each image is stored
+      // as base64 which is ~1.3× the file size; all charts share one DB row.
+      const blobSize = JSON.stringify(state.charts).length;
+      if(blobSize > 4_000_000){
+        showError("Charts total over 4 MB ("+Math.round(blobSize/1e6*10)/10+" MB). Consider using smaller/lower-resolution images — very large chart blobs can fail to save.");
+      }
+      saveChartsForKey(currentSaveKey(), state.charts, err=>{
+        showError("Chart save failed: "+(err&&err.message||"unknown error")+". Your chart is visible but may not persist after a refresh. Try a smaller image.");
+      });
+      _refreshReportHTML();
+      render();
+    };
     r.onerror=()=>showError("Could not read \""+f.name+"\". The file may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
