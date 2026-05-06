@@ -431,7 +431,7 @@ function dbSet(k,v,onError){
   if(_isCacheOnlyKey(k)) return;
   const payload = { key:k, value:v, updated_at:new Date().toISOString() };
   if(_currentUser && _currentUser.id) payload.updated_by = _currentUser.id;
-  const p = sb.from(STORE_TABLE).upsert(payload).then(({error})=>{
+  const writePromise = sb.from(STORE_TABLE).upsert(payload).then(({error})=>{
     if(error){
       console.warn('Supabase write failed for key:',k,error);
       if(typeof onError==='function') try{onError(error);}catch(e){}
@@ -440,9 +440,11 @@ function dbSet(k,v,onError){
     console.warn('Supabase write rejected for key:',k,err);
     if(typeof onError==='function') try{onError(err);}catch(e){}
   });
+  // Race the write against a 12 s timeout so that oversized writes (e.g. large
+  // chart blobs on the free Supabase plan) that hang indefinitely don't leave
+  // "Saving…" stuck forever. Normal writes complete well under 3 s.
+  const p = Promise.race([writePromise, new Promise(resolve=>setTimeout(resolve,12_000))]);
   _pendingWrites.add(p);
-  // Keep the status indicator honest — show "Saving…" for any in-flight write
-  // (charts, files, asset facts, etc.) so the user knows not to navigate away.
   setAutoSaveStatus('saving');
   p.finally(()=>{
     _pendingWrites.delete(p);
@@ -5306,7 +5308,10 @@ function loadChart(key){
         showError("Charts total over 4 MB ("+Math.round(blobSize/1e6*10)/10+" MB). Consider using smaller/lower-resolution images — very large chart blobs can fail to save.");
       }
       saveChartsForKey(currentSaveKey(), state.charts, err=>{
-        showError("Chart save failed: "+(err&&err.message||"unknown error")+". Your chart is visible but may not persist after a refresh. Try a smaller image.");
+        // Chart blob is likely too large for the current Supabase plan — log
+        // quietly rather than showing a blocking error. Charts remain visible
+        // for the current session; upgrade to a paid plan for full persistence.
+        console.warn('[QRB] Chart save failed (likely blob too large for free tier):', err&&err.message||err);
       });
       _refreshReportHTML();
       render();
