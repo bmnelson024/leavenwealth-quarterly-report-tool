@@ -3373,7 +3373,7 @@ function processInvestmentData(opts){
               propErrors.push("\""+prop.name+"\": imported metrics may be from a different quarter ("+importedQ+") — verify or re-import");
             }
           }
-          results.push(prop.metrics);
+          results.push({...prop.metrics, name: prop.metrics.name || prop.name});
         }
         else{ prop.metrics=parsePropertyMetrics(prop); results.push(prop.metrics); }
       }
