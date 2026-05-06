@@ -188,6 +188,9 @@ const BG_CHAMPION_CHARTS_PREFIX = "lw_bgcc_";
 const FILES_PREFIX = "lw_files_";
 const INV_FILES_PREFIX = "lw_invfiles_";
 const VESTMINT_FINANCIALS_PREFIX = "lw_vmfin_";
+const VESTMINT_OTHER_PREFIX = "lw_vmother_";
+const VM_LLS_PHOTO_KEY = "_vm_lls";   // Vestmint cover: Liquid Lending Solutions
+const VM_RFF_PHOTO_KEY = "_vm_rff";   // Vestmint cover: Real Freedom Fund
 // ─── PROPERTY ALIASES ────────────────────────────────────────────────────────
 // Each inner array is a group of equivalent names for the same property.
 // Aliases are matched case-insensitively and checked bidirectionally wherever
@@ -331,6 +334,7 @@ async function supaBootstrap(){
         .not('key', 'like', 'lw_files_%')
         .not('key', 'like', 'lw_invfiles_%')
         .not('key', 'like', 'lw_vmfin_%')
+        .not('key', 'like', 'lw_vmother_%')
         .range(from, from + pageSize - 1)
         .abortSignal(abortCtrl.signal);
       if(error) throw error;
@@ -412,15 +416,23 @@ async function supaFetchLargeKeysForSave(saveKey){
   ];
   // Only fetch keys not already in cache
   const missing = keysToFetch.filter(k=>!Object.prototype.hasOwnProperty.call(_dbCache,k));
-  if(missing.length===0) return;
   try{
-    const { data, error } = await sb
+    if(missing.length>0){
+      const { data, error } = await sb
+        .from(STORE_TABLE)
+        .select("key,value")
+        .in('key', missing);
+      if(error){ console.warn('[QRB] supaFetchLargeKeysForSave error:',error); }
+      else if(data) for(const row of data) _dbCache[row.key]=row.value;
+    }
+    // Also fetch all other-asset PDF keys for this save (dynamic, keyed by asset id)
+    const { data: otherData, error: otherError } = await sb
       .from(STORE_TABLE)
       .select("key,value")
-      .in('key', missing);
-    if(error){ console.warn('[QRB] supaFetchLargeKeysForSave error:',error); return; }
-    if(data) for(const row of data) _dbCache[row.key]=row.value;
-    console.log('[QRB] supaFetchLargeKeysForSave: loaded '+(data?data.length:0)+' large keys for '+saveKey);
+      .like('key', VESTMINT_OTHER_PREFIX+saveKey+'_%');
+    if(otherError){ console.warn('[QRB] supaFetchLargeKeysForSave other-assets error:',otherError); }
+    else if(otherData) for(const row of otherData) _dbCache[row.key]=row.value;
+    console.log('[QRB] supaFetchLargeKeysForSave: done for '+saveKey);
   }catch(e){ console.warn('[QRB] supaFetchLargeKeysForSave exception:',e); }
 }
 // dbSet(k, v, onError?) — update the in-memory cache immediately and persist
@@ -596,7 +608,7 @@ function _makeDefaultState(){
     // ── VestMint Fund mode state ──
     vestmintFundOverview: "",   // editable fund summary / boilerplate text
     vestmintFinancials: [],     // array of data URLs — pages rendered from uploaded financial-statement PDFs
-    vestmintOtherAssets: [],    // [{id, name, narrative}] — dynamically added investment sections
+    vestmintOtherAssets: [],    // [{id, name, pages:[]}] — dynamically added investment sections (pages = data URL arrays from uploaded PDFs)
     vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
     vestmintHasProForma: true,
     vmReportHTML: null,
@@ -618,6 +630,8 @@ function saveBgChampionChartsForKey(k,charts,onErr){if(!k)return;dbSet(BG_CHAMPI
 function loadBgChampionChartsForKey(k){if(!k)return[];try{const d=dbGet(BG_CHAMPION_CHARTS_PREFIX+k);return d?JSON.parse(d):[];}catch(e){return[];}}
 function saveVestmintFinancialsForKey(k,pages,onErr){if(!k)return;dbSet(VESTMINT_FINANCIALS_PREFIX+k,JSON.stringify(pages),onErr);}
 function loadVestmintFinancialsForKey(k){if(!k)return[];try{const d=dbGet(VESTMINT_FINANCIALS_PREFIX+k);return d?JSON.parse(d):[];}catch(e){return[];}}
+function saveVestmintOtherAssetPagesForKey(saveKey,assetId,pages,onErr){if(!saveKey||!assetId)return;dbSet(VESTMINT_OTHER_PREFIX+saveKey+"_"+assetId,JSON.stringify(pages),onErr);}
+function loadVestmintOtherAssetPagesForKey(saveKey,assetId){if(!saveKey||!assetId)return[];try{const d=dbGet(VESTMINT_OTHER_PREFIX+saveKey+"_"+assetId);return d?JSON.parse(d):[];}catch(e){return[];}}
 // ── File persistence helpers ─────────────────────────────────────────────────
 // ArrayBuffers (Excel files) are serialized to base64; strings (CSVs) stored as-is.
 function _bufToB64(buf){const b=new Uint8Array(buf);let s='';const c=8192;for(let i=0;i<b.length;i+=c)s+=String.fromCharCode.apply(null,b.subarray(i,i+c));return btoa(s);}
@@ -805,7 +819,7 @@ function saveProgress(options){
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
     vestmintFundOverview:state.vestmintFundOverview||"",
-    vestmintOtherAssets:state.vestmintOtherAssets||[],
+    vestmintOtherAssets:(state.vestmintOtherAssets||[]).map(a=>({id:a.id,name:a.name})),
     vestmintSections:state.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
     vestmintHasProForma:state.vestmintHasProForma!==false,
     narrativesEdited:!!state.narrativesEdited,
@@ -830,7 +844,10 @@ function saveProgress(options){
       saveInvChartsForKey(key,state.invCharts,onPersistErr);
       saveBgChampionChartsForKey(key,(state.bgChampionCustom&&state.bgChampionCustom.charts)||[],onPersistErr);
       if(filesChanged) saveInvFilesForKey(key,state.invProperties,onPersistErr);
-      if(state.source==='vestmint') saveVestmintFinancialsForKey(key,state.vestmintFinancials||[],onPersistErr);
+      if(state.source==='vestmint'){
+        saveVestmintFinancialsForKey(key,state.vestmintFinancials||[],onPersistErr);
+        (state.vestmintOtherAssets||[]).forEach(a=>saveVestmintOtherAssetPagesForKey(key,a.id,a.pages||[],onPersistErr));
+      }
     } else {
       saveChartsForKey(key,state.charts,onPersistErr);
       if(filesChanged) saveFilesForKey(key,state.files,onPersistErr);
@@ -1034,7 +1051,7 @@ async function loadSave(key){
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       vestmintFundOverview:data.vestmintFundOverview||"",
       vestmintFinancials:loadVestmintFinancialsForKey(key),
-      vestmintOtherAssets:data.vestmintOtherAssets||[],
+      vestmintOtherAssets:(data.vestmintOtherAssets||[]).map(a=>({...a, pages:loadVestmintOtherAssetPagesForKey(key,a.id)})),
       vestmintSections:data.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
       vestmintHasProForma:data.vestmintHasProForma!==false,
       vmReportHTML:null,
@@ -4067,14 +4084,26 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const propPhotos=state.invProperties.filter(p=>p.name).map(p=>({name:p.name,photo:loadPhotoForProperty(p.name)})).filter(p=>p.photo);
   const n_photos=propPhotos.length;
   const thumbW=190,thumbH=Math.round(thumbW*0.65);
-  const photoThumb=p=>`<div style="text-align:center;flex-shrink:0">
-    ${p.photo?`<img src="${p.photo}" style="width:${thumbW}px;height:${thumbH}px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,196,140,0.4);display:block"/>`:
-    `<div style="width:${thumbW}px;height:${thumbH}px;border-radius:8px;border:2px solid rgba(0,196,140,0.4);background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;color:rgba(255,255,255,0.35);font-family:sans-serif;letter-spacing:1px;text-transform:uppercase">No Image</span></div>`}
-    <div style="font-size:9px;color:rgba(255,255,255,0.55);margin-top:6px;font-family:sans-serif;letter-spacing:1.5px;text-transform:uppercase;width:${thumbW}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.name)}</div>
+  const photoThumb=(p,w,h)=>`<div style="text-align:center;flex-shrink:0">
+    ${p.photo?`<img src="${p.photo}" style="width:${w||thumbW}px;height:${h||thumbH}px;object-fit:cover;border-radius:8px;border:2px solid rgba(0,196,140,0.4);display:block"/>`:
+    `<div style="width:${w||thumbW}px;height:${h||thumbH}px;border-radius:8px;border:2px solid rgba(0,196,140,0.4);background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;color:rgba(255,255,255,0.35);font-family:sans-serif;letter-spacing:1px;text-transform:uppercase">No Image</span></div>`}
+    <div style="font-size:9px;color:rgba(255,255,255,0.55);margin-top:6px;font-family:sans-serif;letter-spacing:1.5px;text-transform:uppercase;width:${w||thumbW}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(p.name)}</div>
   </div>`;
   const photoStrip=n_photos===0?""
     :`<div style="margin-top:36px;display:grid;grid-template-columns:repeat(${n_photos<=2?n_photos:n_photos===4?2:3},${thumbW}px);gap:16px;justify-content:center;max-width:660px">
-        ${propPhotos.map(photoThumb).join("")}
+        ${propPhotos.map(p=>photoThumb(p)).join("")}
+      </div>`;
+  // Fund entity photos for second row (Liquid Lending Solutions + Real Freedom Fund)
+  const llsPhoto=loadPhotoForProperty(VM_LLS_PHOTO_KEY);
+  const rffPhoto=loadPhotoForProperty(VM_RFF_PHOTO_KEY);
+  const fundEntityPhotos=[
+    {name:"Liquid Lending Solutions",photo:llsPhoto},
+    {name:"Real Freedom Fund",photo:rffPhoto}
+  ].filter(p=>p.photo);
+  const fundThumbW=220,fundThumbH=Math.round(fundThumbW*0.62);
+  const fundEntityRow=fundEntityPhotos.length===0?""
+    :`<div style="margin-top:16px;display:flex;gap:20px;justify-content:center">
+        ${fundEntityPhotos.map(p=>photoThumb(p,fundThumbW,fundThumbH)).join("")}
       </div>`;
   const propNamesHtml=state.invProperties.filter(p=>p.name).map(p=>`<span style="white-space:nowrap">${escapeHtml(p.name)}</span>`).join(" · ");
 
@@ -4122,6 +4151,9 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // Fund overview text → convert line-breaks + bullet chars to HTML
   const fmtOverview=(raw)=>{
     if(!raw) return "";
+    // If the content contains HTML tags (from the rich-text editor), pass through directly.
+    // Otherwise fall back to plain-text escaping for legacy saves.
+    if(/<[a-z][\s\S]*>/i.test(raw)) return raw;
     return escapeHtml(raw).replace(/\n/g,"<br>");
   };
 
@@ -4141,7 +4173,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // Financial statement images
   const finPages=(state.vestmintFinancials||[]);
   // Other assets
-  const otherAssets=(state.vestmintOtherAssets||[]).filter(a=>a.name||a.narrative);
+  const otherAssets=(state.vestmintOtherAssets||[]).filter(a=>a.name||(a.pages&&a.pages.length>0));
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${inv} ${qtr} Investor Report</title><style>${css}</style></head><body>
@@ -4153,6 +4185,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   <div class="divider"></div>
   <h1>${inv}</h1>
   ${n_photos>0?photoStrip:`<div style="margin-top:20px;font-family:sans-serif;font-size:11px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;">${propNamesHtml}</div>`}
+  ${fundEntityRow}
   ${n_photos>0?`<div style="margin-top:16px;font-family:sans-serif;font-size:10px;color:rgba(255,255,255,0.35);letter-spacing:2px;text-transform:uppercase;">${propNamesHtml}</div>`:""}
 </div>
 <!-- PAGE 2: SUMMARY — fund overview + QoQ + narratives -->
@@ -4257,12 +4290,21 @@ ${sec.financialStatements&&finPages.length>0?(()=>{
 <!-- OTHER ASSET SECTIONS -->
 ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const aName=escapeHtml(a.name||"Additional Investment");
-  const aText=escapeHtml(a.narrative||"").replace(/\n/g,"<br>");
-  return `<div class="page">
+  const aPages=a.pages||[];
+  if(aPages.length===0){
+    return `<div class="page">
   <div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div>
-  <div class="ns"><p class="nt">${aText}</p></div>
+  <div style="display:flex;align-items:center;justify-content:center;height:60%;color:#9ca3af;font-family:sans-serif;font-size:14px">No PDF uploaded for this asset.</div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`;
+  }
+  return aPages.map((src,pi)=>`<div class="page" style="padding:0;overflow:hidden">
+  <div style="position:absolute;top:18px;left:28px;right:28px;display:flex;justify-content:space-between;align-items:center;z-index:2;pointer-events:none">
+    <div class="pn" style="margin:0">${inv}</div><div class="sh" style="margin:0">${aName}${aPages.length>1?" — Page "+(pi+1):""}</div>
+  </div>
+  <img src="${src}" style="width:100%;height:100%;object-fit:contain;display:block"/>
+  <div class="footer-prop" style="position:absolute;bottom:18px;left:28px">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo" style="position:absolute;bottom:14px;right:28px"/><div class="pgn" style="position:absolute;bottom:18px;left:50%;transform:translateX(-50%)">${pg.v()}</div>
+</div>`).join("\n");
 }).join("\n"):""}
 <!-- LAST PAGE: FOOTNOTES -->
 <div class="page">
@@ -5087,9 +5129,41 @@ function renderVestmintStep2(){
       <textarea id="vm-narr-${k}" oninput="state.invNarratives['${k}']=this.value;state.invNarrativesEdited=true">${escapeHtml(state.invNarratives[k])}</textarea></div>`).join("")}
 
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
-      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:8px;letter-spacing:.5px;text-transform:uppercase">Fund Overview</div>
+      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase">🖼️ Fund Entity Cover Photos</div>
+      <p style="font-size:12px;color:#5a8070;margin:0 0 12px">These appear on the cover page below the property photos — one row of two.</p>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        ${(()=>{
+          const llsPhoto=loadPhotoForProperty(VM_LLS_PHOTO_KEY);
+          const rffPhoto=loadPhotoForProperty(VM_RFF_PHOTO_KEY);
+          const photoCard=(label,key,photo)=>`
+            <div style="flex:1;min-width:200px;background:white;border:1px solid #c8e6de;border-radius:8px;padding:12px">
+              <div style="font-size:12px;font-weight:600;color:#1a3a35;margin-bottom:8px">${label}</div>
+              ${photo
+                ?`<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><img src="${photo}" style="width:80px;height:52px;object-fit:cover;border-radius:6px;border:1px solid #c8e6de"/><span style="font-size:12px;color:#16a34a;font-weight:600">✓ Photo uploaded</span></div>`
+                :`<div style="font-size:12px;color:#9ca3af;margin-bottom:8px">No photo uploaded</div>`}
+              <div style="display:flex;gap:8px">
+                <button onclick="uploadVestmintFundPhoto('${key}')" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">📷 ${photo?"Replace":"Upload"}</button>
+                ${photo?`<button onclick="dbSet(photoStorageKey('${key}'),null);_refreshVestmintReportHTML();render()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Remove</button>`:""}
+              </div>
+            </div>`;
+          return photoCard("Liquid Lending Solutions",VM_LLS_PHOTO_KEY,llsPhoto)+photoCard("Real Freedom Fund",VM_RFF_PHOTO_KEY,rffPhoto);
+        })()}
+      </div>
+    </div>
+
+    <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
+      <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase">Fund Overview</div>
       <p style="font-size:12px;color:#5a8070;margin:0 0 8px">Optional — appears on the Summary page above the financials table.</p>
-      <textarea id="vm-fund-overview" rows="5" style="width:100%;padding:10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;resize:vertical;box-sizing:border-box" oninput="state.vestmintFundOverview=this.value">${escapeHtml(state.vestmintFundOverview||"")}</textarea>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <button onmousedown="event.preventDefault();document.execCommand('bold')" title="Bold" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;font-weight:700;cursor:pointer;color:#1a3a35;line-height:1.4">B</button>
+        <button onmousedown="event.preventDefault();document.execCommand('underline')" title="Underline" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;cursor:pointer;color:#1a3a35;text-decoration:underline;line-height:1.4">U</button>
+        <button onmousedown="event.preventDefault();document.execCommand('insertUnorderedList')" title="Bullet list" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;cursor:pointer;color:#1a3a35;line-height:1.4">• List</button>
+      </div>
+      <div id="vm-fund-overview"
+        contenteditable="true"
+        oninput="state.vestmintFundOverview=this.innerHTML"
+        style="width:100%;min-height:100px;padding:10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;box-sizing:border-box;background:white;outline:none"
+      >${state.vestmintFundOverview||""}</div>
     </div>
 
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
@@ -5151,7 +5225,7 @@ function renderVestmintStep2(){
           <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase">🏦 Other Assets</div>
           <p style="font-size:12px;color:#5a8070;margin:4px 0 0">Add entries for investments outside the fund's core portfolio (e.g. Real Freedom Fund LLC).</p>
         </div>
-        <button onclick="(function(){var id=Date.now();state.vestmintOtherAssets.push({id:id,name:'',narrative:''});render();})()" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">+ Add Asset</button>
+        <button onclick="(function(){var id=Date.now();state.vestmintOtherAssets.push({id:id,name:'',pages:[]});render();})()" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">+ Add Asset</button>
       </div>
       ${otherAssets.length===0?`<div style="font-size:12px;color:#9ca3af;font-style:italic;padding:8px 0">No other assets added yet.</div>`
       :otherAssets.map((a,i)=>`
@@ -5160,11 +5234,16 @@ function renderVestmintStep2(){
             <input type="text" placeholder="Asset name (e.g. Real Freedom Fund LLC)" value="${escapeHtml(a.name||"")}"
               oninput="(function(v){var a=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(a)a.name=v;})(this.value)"
               style="flex:1;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
-            <button onclick="(function(){state.vestmintOtherAssets=state.vestmintOtherAssets.filter(function(x){return x.id!==${a.id};});render();})()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer">✕</button>
+            <button onclick="(function(){state.vestmintOtherAssets=state.vestmintOtherAssets.filter(function(x){return x.id!==${a.id};});saveVestmintOtherAssetPagesForKey(currentSaveKey(),'${a.id}',[]);render();})()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer">✕</button>
           </div>
-          <textarea rows="4" placeholder="Narrative / description for this asset..."
-            style="width:100%;padding:8px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;resize:vertical;box-sizing:border-box"
-            oninput="(function(v){var a=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(a)a.narrative=v;})(this.value)">${escapeHtml(a.narrative||"")}</textarea>
+          <div style="margin-top:2px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <button onclick="loadVestmintOtherAssetPDF('${a.id}')" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer">📄 ${(a.pages||[]).length>0?"Replace PDF":"Upload PDF"}</button>
+              ${(a.pages||[]).length>0?`<button onclick="(function(){var asset=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(asset)asset.pages=[];saveVestmintOtherAssetPagesForKey(currentSaveKey(),'${a.id}',[]);render();})()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">✕ Remove</button>`:""}
+              <span style="font-size:12px;color:${(a.pages||[]).length>0?"#16a34a":"#9ca3af"};font-weight:600">${(a.pages||[]).length>0?`✓ ${(a.pages||[]).length} page${(a.pages||[]).length===1?"":"s"} loaded`:"No PDF uploaded"}</span>
+            </div>
+            ${(a.pages||[]).length>0?`<div style="display:flex;gap:8px;flex-wrap:wrap">${(a.pages||[]).map((src,pi)=>`<div style="border:1px solid #c8e6de;border-radius:6px;overflow:hidden;width:100px"><img src="${src}" style="width:100%;height:130px;object-fit:cover;display:block"/><div style="font-size:10px;text-align:center;padding:3px;color:#5a8070;background:#f9fafb">Page ${pi+1}</div></div>`).join("")}</div>`:""}
+          </div>
         </div>`).join("")}
     </div>
 
@@ -5203,6 +5282,22 @@ function loadVestmintFinancialsPDF(){
       const pages=await renderPdfToDataURLs(buf);
       state.vestmintFinancials=pages;
       saveVestmintFinancialsForKey(currentSaveKey(),pages);
+      render();
+    }catch(err){showError("Could not render PDF: "+err.message);}
+  };
+  inp.click();
+}
+function loadVestmintOtherAssetPDF(assetId){
+  const inp=document.createElement("input"); inp.type="file"; inp.accept=".pdf";
+  inp.onchange=async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    try{
+      const buf=await f.arrayBuffer();
+      const pages=await renderPdfToDataURLs(buf);
+      const asset=state.vestmintOtherAssets.find(a=>String(a.id)===String(assetId));
+      if(!asset){showError("Asset not found.");return;}
+      asset.pages=pages;
+      saveVestmintOtherAssetPagesForKey(currentSaveKey(),assetId,pages);
       render();
     }catch(err){showError("Could not render PDF: "+err.message);}
   };
@@ -5703,6 +5798,17 @@ function uploadMWP5Photo(name){
     const f=e.target.files[0];if(!f)return;
     const r=new FileReader();
     r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(name,compressed);_refreshInvReportHTML();render();});};
+    r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
+    r.readAsDataURL(f);
+  };
+  inp.click();
+}
+function uploadVestmintFundPhoto(photoKey){
+  const inp=document.createElement("input");inp.type="file";inp.accept=".png,.jpg,.jpeg";
+  inp.onchange=e=>{
+    const f=e.target.files[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{compressPhoto(ev.target.result,compressed=>{savePhotoForProperty(photoKey,compressed);_refreshVestmintReportHTML();render();});};
     r.onerror=()=>showError("Could not read \""+f.name+"\". The image may be corrupt or inaccessible.");
     r.readAsDataURL(f);
   };
