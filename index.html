@@ -4639,9 +4639,12 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const parts=innerContent.split(headingRe);
   // Helper: chunk an array of string segments into CHARS_PER_PAGE-sized groups
   const chunkSegments=(segs)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>CHARS_PER_PAGE){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
-  // Helper: if a single chunk is still too long, split it further at </li> / </p> boundaries
+  // Helper: if a single chunk is still too long, split it further at </li> / </p> boundaries.
+  // Uses a lower threshold (2000) than CHARS_PER_PAGE because RF stat grids take significant
+  // vertical space beyond what character count alone predicts.
+  const SPLIT_LONG_THRESHOLD=2000;
   const splitLong=(chunk)=>{
-    if(chunk.length<=CHARS_PER_PAGE)return[chunk];
+    if(chunk.length<=SPLIT_LONG_THRESHOLD)return[chunk];
     const segs=chunk.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
     return segs.length>1?chunkSegments(segs):[chunk];
   };
