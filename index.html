@@ -4624,7 +4624,20 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   }
   const bm=a.html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
   const body=bm?bm[1]:a.html;
-  return `<div class="page" style="padding:0;border-left:none;position:relative;padding-bottom:60px;">${body}<div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
+  // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
+  const CHARS_PER_PAGE=3500;
+  const wrapPage=(content)=>`<div class="page" style="padding:0;border-left:none;position:relative;padding-bottom:60px;">${content}<div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
+  const parts=body.split(headingRe);
+  if(parts.length<=1){return wrapPage(body);}
+  const pageChunks=[];let chunk='';
+  for(const part of parts){
+    if(chunk.length>0&&chunk.length+part.length>CHARS_PER_PAGE){pageChunks.push(chunk);chunk='';}
+    chunk+=part;
+  }
+  if(chunk.trim())pageChunks.push(chunk);
+  return pageChunks.map(wrapPage).join('\n');
 }).join("\n"):""}
 <!-- UNAUDITED FINANCIAL STATEMENTS (embedded PDF pages) -->
 ${sec.financialStatements&&finPages.length>0?(()=>{
