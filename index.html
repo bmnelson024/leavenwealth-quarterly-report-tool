@@ -4637,16 +4637,18 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
   const parts=innerContent.split(headingRe);
-  // Helper: chunk an array of string segments into CHARS_PER_PAGE-sized groups
-  const chunkSegments=(segs)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>CHARS_PER_PAGE){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
-  // Helper: if a single chunk is still too long, split it further at </li> / </p> boundaries.
-  // Uses a lower threshold (2000) than CHARS_PER_PAGE because RF stat grids take significant
-  // vertical space beyond what character count alone predicts.
-  const SPLIT_LONG_THRESHOLD=2000;
+  // Helper: chunk segments up to maxChars each
+  const chunkSegments=(segs,maxChars=CHARS_PER_PAGE)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>maxChars){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
+  // Helper: split an oversized chunk at </li>/</p> boundaries.
+  // RF stat grids (.rf-stats) are visually tall but compact in character count — when a chunk
+  // contains a stat grid, always attempt to split and use a tighter secondary grouping (1400 chars)
+  // to ensure the stats + bullets don't overflow the 1056px PDF page height.
   const splitLong=(chunk)=>{
-    if(chunk.length<=SPLIT_LONG_THRESHOLD)return[chunk];
+    const hasStats=chunk.includes('rf-stats');
+    if(!hasStats&&chunk.length<=2000)return[chunk];
     const segs=chunk.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
-    return segs.length>1?chunkSegments(segs):[chunk];
+    if(segs.length<=1)return[chunk];
+    return chunkSegments(segs,hasStats?1400:CHARS_PER_PAGE);
   };
   let pageChunks;
   if(parts.length>1){
