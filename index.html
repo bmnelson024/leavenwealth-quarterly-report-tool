@@ -4199,7 +4199,7 @@ ${sec.leasingSection?`
 // Renders one Business Plan Status page for a Vestmint sub-portfolio (e.g. Greenway, Brent Village).
 // bp  = state.vestmintBpGreenway or state.vestmintBpBrentVillage
 // label = display name for this group (e.g. "Greenway 1 & 2")
-function buildVmBpPage(bp, label, qtr, inv, pg){
+function buildVmBpPage(bp, label, qtr, inv, pg, scopeNote=''){
   if(!bp||!bp.enabled) return '';
   const comp=parseInt(bp.unitsCompleted)||0;
   const rem=parseInt(bp.unitsRemaining)||0;
@@ -4230,6 +4230,7 @@ function buildVmBpPage(bp, label, qtr, inv, pg){
   return `
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
+  ${scopeNote}
   <div class="sh2">${escapeHtml(label)}</div>
   ${hasProgress?`
   <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px;font-family:sans-serif;">Remodel Progress</div>
@@ -4321,6 +4322,7 @@ function buildVmBpPage(bp, label, qtr, inv, pg){
 </div>${hasNarrative&&(hasProgress||hasBudget||hasRent)?`
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
+  ${scopeNote}
   <div class="sh2">${escapeHtml(label)} <span style="font-size:10px;font-weight:400;letter-spacing:1px;opacity:0.6">(continued)</span></div>
   <div class="sh2">Business Plan Narrative</div>
   <div class="ns"><p class="nt">${escapeHtml(bp.narrative).replace(/\n/g,'<br>')}</p></div>
@@ -4405,7 +4407,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 .pgn{position:absolute;bottom:24px;right:52px;font-family:sans-serif;font-size:10px;color:var(--muted);}
 .footer-logo{position:absolute;bottom:12px;right:100px;height:48px;width:auto;opacity:0.75;}
 .footer-prop{position:absolute;bottom:28px;left:52px;font-family:sans-serif;font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;}
-.fs-img{width:100%;max-height:900px;object-fit:contain;object-position:top left;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:12px;}
+.fs-img{width:100%;max-height:880px;object-fit:contain;object-position:top left;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:12px;}
 @media print{@page{margin:0;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{background:white;}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page;}.page:last-child{page-break-after:auto;}img{box-shadow:none;}}`;
 
   // Fund overview text → convert line-breaks + bullet chars to HTML
@@ -4484,7 +4486,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
     .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
   const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
-  const otherAssetOverrides=`.rf-report{padding:48px 52px 80px!important;max-width:100%!important;margin:0!important;}
+  const otherAssetOverrides=`.rf-report{padding:16px 52px 80px!important;max-width:100%!important;margin:0!important;}
 .rf-title h1{font-size:28px!important;} .rf-title .subtitle,.rf-title .confidential{font-size:12px!important;}
 .rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.75!important;}
 .rf-note,.rf-disclaimer{font-size:11px!important;line-height:1.6!important;}
@@ -4558,8 +4560,8 @@ ${summaryOverflow&&(n.capex||n.outlook)?`<div class="page">
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>
 <!-- BUSINESS PLAN PAGES -->
-${buildVmBpPage(state.vestmintBpGreenway||{}, 'Greenway 1 & 2', qtr, inv, pg)}
-${buildVmBpPage(state.vestmintBpBrentVillage||{}, 'Brent Village', qtr, inv, pg)}
+${buildVmBpPage(state.vestmintBpGreenway||{}, 'Greenway 1 & 2', qtr, inv, pg, scopeNote)}
+${buildVmBpPage(state.vestmintBpBrentVillage||{}, 'Brent Village', qtr, inv, pg, scopeNote)}
 <!-- FINANCIAL CHARTS -->
 ${sec.financialCharts?`
 <div class="page">
@@ -4630,8 +4632,9 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
   // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
   const CHARS_PER_PAGE=3500;
-  // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply
-  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply.
+  // A .pn + .sh header sits above the .rf-report so every page looks consistent with the rest of the report.
+  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
   const parts=innerContent.split(headingRe);
   if(parts.length<=1){return wrapPage(innerContent);}
@@ -4646,8 +4649,8 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
 <!-- UNAUDITED FINANCIAL STATEMENTS (embedded PDF pages) -->
 ${sec.financialStatements&&finPages.length>0?(()=>{
   // Group into pages of up to 1 image each (each PDF page gets its own report page)
-  return finPages.map((imgSrc,i)=>`<div class="page">
-  <div class="pn">${inv}</div><div class="sh">Unaudited Financial Statements — ${qtr}${finPages.length>1?` <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(${i+1} of ${finPages.length})</span>`:""}</div>
+  return finPages.map((imgSrc,i)=>`<div class="page" style="break-inside:avoid;page-break-inside:avoid;">
+  <div class="sh">Unaudited Financial Statements — ${qtr}${finPages.length>1?` <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(${i+1} of ${finPages.length})</span>`:""}</div>
   <img src="${imgSrc}" class="fs-img" alt="Financial Statement page ${i+1}"/>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`).join("\n");
