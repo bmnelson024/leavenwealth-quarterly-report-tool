@@ -4478,14 +4478,23 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const otherAssets=(state.vestmintOtherAssets||[]).filter(a=>a.name||a.html);
   // Collect any <style> blocks from other-asset HTML files so they render correctly in the report,
   // then append overrides that normalize sizing to match the report's typography.
-  // Extract styles from other-asset HTML files, stripping document-level selectors (body, *, ::before/after)
-  // that would pollute the entire report if injected into the shared <head>.
-  const stripGlobalRules=(css)=>css
-    .replace(/\bhtml\s*\{[^}]*\}/g,'')
-    .replace(/\bbody\s*\{[^}]*\}/g,'')
-    .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
-    .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
-  const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
+  // Extract and fully scope styles from other-asset HTML files.
+  // Simply stripping body/html/* is not enough — any bare element selector (e.g. img{}, h1{}, p{})
+  // would still bleed into the rest of the report. Instead we scope EVERY rule to .rf-report so
+  // injected CSS is completely isolated and cannot affect financial-statement images or other pages.
+  const scopeRFStyles=(css)=>{
+    // Drop @-rules entirely (RF-specific @media / @keyframes should not apply globally)
+    css=css.replace(/@[a-z][^{]*\{(?:[^{}]|\{[^}]*\})*\}/gi,'');
+    // Drop any remaining html/body/* global selectors
+    css=css.replace(/\bhtml\s*\{[^}]*\}/g,'').replace(/\bbody\s*\{[^}]*\}/g,'').replace(/\*[^{]*\{[^}]*\}/g,'');
+    // Scope every remaining rule to .rf-report
+    return css.replace(/([^{}\n@][^{}\n]*)\s*\{([^{}]*)\}/g,(m,sel,rules)=>{
+      const s=sel.trim();if(!s)return'';
+      const scoped=s.split(',').map(p=>`.rf-report ${p.trim()}`).join(',');
+      return `${scoped}{${rules}}`;
+    });
+  };
+  const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?scopeRFStyles(sm[1]):'';}).join('\n');
   const otherAssetOverrides=`.rf-report{padding:16px 52px 80px!important;max-width:100%!important;margin:0!important;}
 .rf-title h1{font-size:28px!important;} .rf-title .subtitle,.rf-title .confidential{font-size:12px!important;}
 .rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.75!important;}
@@ -4637,13 +4646,20 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
   const parts=innerContent.split(headingRe);
-  if(parts.length<=1){return wrapPage(innerContent);}
-  const pageChunks=[];let chunk='';
-  for(const part of parts){
-    if(chunk.length>0&&chunk.length+part.length>CHARS_PER_PAGE){pageChunks.push(chunk);chunk='';}
-    chunk+=part;
+  // Helper: chunk an array of string segments into CHARS_PER_PAGE-sized groups
+  const chunkSegments=(segs)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>CHARS_PER_PAGE){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
+  let pageChunks;
+  if(parts.length>1){
+    // Section-heading splits available — use them
+    pageChunks=chunkSegments(parts);
+  } else if(innerContent.length>CHARS_PER_PAGE){
+    // No section headings but content is long — split at </p> boundaries to prevent
+    // the single .page div from overflowing the 1056px print page height.
+    const pSegs=innerContent.split(/(?<=<\/p>)/i);
+    pageChunks=pSegs.length>1?chunkSegments(pSegs):[innerContent];
+  } else {
+    pageChunks=[innerContent];
   }
-  if(chunk.trim())pageChunks.push(chunk);
   return pageChunks.map(wrapPage).join('\n');
 }).join("\n"):""}
 <!-- UNAUDITED FINANCIAL STATEMENTS (embedded PDF pages) -->
