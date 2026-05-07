@@ -4417,29 +4417,43 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td><td class="${prev&&m.delinquency<=prev.delinquency?"neg":"pos"}">${prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—"}</td></tr>
   </tbody></table>`;
 
-  // Summary overflow check
-  const summaryTextLen=(n.income||"").length+(n.expenses||"").length+(n.capex||"").length+(n.outlook||"").length;
-  const summaryOverflow=summaryTextLen>700||(n.outlook||"").length>300;
+  // Summary overflow checks
+  // summaryCapexOverflow: income+expenses+capex alone are too long for one page →
+  //   move capex (and outlook) to the continuation page.
+  // summaryOverflow: total narrative is long OR outlook alone is long →
+  //   move at minimum outlook to the continuation page.
+  const summaryMainLen=(n.income||"").length+(n.expenses||"").length+(n.capex||"").length;
+  const summaryTextLen=summaryMainLen+(n.outlook||"").length;
+  const summaryCapexOverflow=summaryMainLen>1500;
+  const summaryOverflow=summaryCapexOverflow||summaryTextLen>700||(n.outlook||"").length>300;
 
   // Fund Overview split logic — split long overviews across two pages
   const foRaw=state.vestmintFundOverview||"";
   const foOverflow=foRaw.length>1800;
   let foPart1=foRaw, foPart2="";
   if(foOverflow){
-    const splitTarget=Math.floor(foRaw.length/2);
-    // For HTML content: find the nearest closing block-level tag to the midpoint
-    // so we never split inside a tag or inline element
+    // Target 70% on page 1 — keeps late bullet points on page 1 and pushes
+    // the next section heading onto page 2.
+    const splitTarget=Math.floor(foRaw.length*0.70);
+    // For HTML content: find the first closing block-level tag AT OR AFTER the
+    // target so we always split on a clean element boundary, never mid-tag.
     const blockCloseRe=/(<\/(?:p|li|ul|ol|h[1-6]|div|blockquote)>)/gi;
-    let bestPos=splitTarget;
-    let bestDist=Infinity;
+    let bestPos=null;
     let _bm;
     while((_bm=blockCloseRe.exec(foRaw))!==null){
       const pos=_bm.index+_bm[0].length;
-      const dist=Math.abs(pos-splitTarget);
-      if(dist<bestDist){bestDist=dist;bestPos=pos;}
+      if(pos>=splitTarget){bestPos=pos;break;} // first boundary at or after target
+    }
+    // Nothing found ahead? take the last boundary before the target instead
+    if(bestPos===null){
+      blockCloseRe.lastIndex=0;
+      while((_bm=blockCloseRe.exec(foRaw))!==null){
+        const pos=_bm.index+_bm[0].length;
+        if(pos<splitTarget) bestPos=pos;
+      }
     }
     // For plain-text content (no HTML): fall back to nearest newline
-    if(bestDist===Infinity){
+    if(bestPos===null){
       const nlIdx=foRaw.lastIndexOf('\n',splitTarget+300);
       bestPos=(nlIdx>splitTarget-300)?nlIdx:splitTarget;
     }
@@ -4487,14 +4501,15 @@ ${sec.fundOverview&&state.vestmintFundOverview?`<div class="page">
   ${qoqTbl}
   <div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income||"").replace(/\n/g,"<br>")}</p></div>
   <div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses||"").replace(/\n/g,"<br>")}</p></div>
-  ${n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,"<br>")}</p></div>`:""}
+  ${!summaryCapexOverflow&&n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,"<br>")}</p></div>`:""}
   ${!summaryOverflow&&n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,"<br>")}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>
-${summaryOverflow&&n.outlook?`<div class="page">
+${summaryOverflow&&(n.capex||n.outlook)?`<div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
   ${scopeNote}
-  <div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,"<br>")}</p></div>
+  ${summaryCapexOverflow&&n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,"<br>")}</p></div>`:""}
+  ${n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,"<br>")}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:""}
 <!-- PAGE 3: PORTFOLIO SNAPSHOT -->
