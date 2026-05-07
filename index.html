@@ -4488,7 +4488,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
   const otherAssetOverrides=`.rf-report{padding:16px 52px 80px!important;max-width:100%!important;margin:0!important;}
 .rf-title h1{font-size:28px!important;} .rf-title .subtitle,.rf-title .confidential{font-size:12px!important;}
-.rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.75!important;}
+.rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.5!important;}
 .rf-note,.rf-disclaimer{font-size:11px!important;line-height:1.6!important;}
 .rf-stat .value{font-size:20px!important;} .rf-stat .label{font-size:10px!important;}
 .rf-section-heading{font-size:10px!important;} .rf-property-heading .name{font-size:14px!important;} .rf-property-heading .location{font-size:11px!important;}
@@ -4637,18 +4637,13 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
   const parts=innerContent.split(headingRe);
-  // Helper: chunk segments up to maxChars each
-  const chunkSegments=(segs,maxChars=CHARS_PER_PAGE)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>maxChars){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
-  // Helper: split an oversized chunk at </li>/</p> boundaries.
-  // RF stat grids (.rf-stats) are visually tall but compact in character count — when a chunk
-  // contains a stat grid, always attempt to split and use a tighter secondary grouping (1400 chars)
-  // to ensure the stats + bullets don't overflow the 1056px PDF page height.
+  // Helper: chunk segments up to CHARS_PER_PAGE each
+  const chunkSegments=(segs)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>CHARS_PER_PAGE){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
+  // Helper: if a single chunk is still too long (>2000 chars), split it further at </li>/</p> boundaries.
   const splitLong=(chunk)=>{
-    const hasStats=chunk.includes('rf-stats');
-    if(!hasStats&&chunk.length<=2000)return[chunk];
+    if(chunk.length<=2000)return[chunk];
     const segs=chunk.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
-    if(segs.length<=1)return[chunk];
-    return chunkSegments(segs,hasStats?1400:CHARS_PER_PAGE);
+    return segs.length>1?chunkSegments(segs):[chunk];
   };
   let pageChunks;
   if(parts.length>1){
