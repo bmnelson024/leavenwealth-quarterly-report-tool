@@ -4623,13 +4623,18 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   }
   const bm=a.html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
   const body=bm?bm[1]:a.html;
+  // Extract inner content of .rf-report so each split chunk can be re-wrapped in its own
+  // .rf-report div — this ensures otherAssetOverrides CSS (padding, margin) applies to all pages.
+  const rfInnerMatch=body.match(/class="rf-report"[^>]*>([\s\S]*)<\/div>\s*$/i);
+  const innerContent=rfInnerMatch?rfInnerMatch[1]:body;
   // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
   // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
   const CHARS_PER_PAGE=3500;
-  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${content}<div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply
+  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
-  const parts=body.split(headingRe);
-  if(parts.length<=1){return wrapPage(body);}
+  const parts=innerContent.split(headingRe);
+  if(parts.length<=1){return wrapPage(innerContent);}
   const pageChunks=[];let chunk='';
   for(const part of parts){
     if(chunk.length>0&&chunk.length+part.length>CHARS_PER_PAGE){pageChunks.push(chunk);chunk='';}
