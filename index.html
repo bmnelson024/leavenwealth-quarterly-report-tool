@@ -4426,13 +4426,25 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const foOverflow=foRaw.length>1800;
   let foPart1=foRaw, foPart2="";
   if(foOverflow){
-    // Find a clean split point (paragraph break) nearest the halfway mark
     const splitTarget=Math.floor(foRaw.length/2);
-    const searchFrom=Math.max(0,splitTarget-300);
-    const nlIdx=foRaw.lastIndexOf('\n',splitTarget+300);
-    const splitPos=(nlIdx>searchFrom)?nlIdx:splitTarget;
-    foPart1=foRaw.slice(0,splitPos).trimEnd();
-    foPart2=foRaw.slice(splitPos).trimStart();
+    // For HTML content: find the nearest closing block-level tag to the midpoint
+    // so we never split inside a tag or inline element
+    const blockCloseRe=/(<\/(?:p|li|ul|ol|h[1-6]|div|blockquote)>)/gi;
+    let bestPos=splitTarget;
+    let bestDist=Infinity;
+    let _bm;
+    while((_bm=blockCloseRe.exec(foRaw))!==null){
+      const pos=_bm.index+_bm[0].length;
+      const dist=Math.abs(pos-splitTarget);
+      if(dist<bestDist){bestDist=dist;bestPos=pos;}
+    }
+    // For plain-text content (no HTML): fall back to nearest newline
+    if(bestDist===Infinity){
+      const nlIdx=foRaw.lastIndexOf('\n',splitTarget+300);
+      bestPos=(nlIdx>splitTarget-300)?nlIdx:splitTarget;
+    }
+    foPart1=foRaw.slice(0,bestPos).trimEnd();
+    foPart2=foRaw.slice(bestPos).trimStart();
   }
 
   // Financial statement images
@@ -5656,7 +5668,7 @@ function loadVestmintOtherAssetPDF(assetId){
     const f=e.target.files[0]; if(!f) return;
     try{
       const buf=await f.arrayBuffer();
-      const pages=await renderPdfToDataURLs(buf);
+      const pages=await renderPdfToDataURLs(buf, 2.0, 0.92);
       const asset=state.vestmintOtherAssets.find(a=>String(a.id)===String(assetId));
       if(!asset){showError("Asset not found.");return;}
       asset.pages=pages;
@@ -5736,22 +5748,22 @@ function _refreshVestmintReportHTML(){
   state.vmReportHTML = buildVestmintReport(state.invMetrics, state.invNarratives, state.investmentName, state.currentQuarter, state.vestmintSections);
 }
 // Render each page of a PDF ArrayBuffer to JPEG data URLs via PDF.js.
-// Scale 1.5 / quality 0.82 balances readability against blob size:
-// a 20-page statement at 2.0/0.92 was ~280 MB in-memory and 4–8 MB stored;
-// 1.5/0.82 halves both with no visible quality loss at screen/print resolution.
-async function renderPdfToDataURLs(arrayBuffer){
+// Default scale 1.5 / quality 0.82 keeps financial statements (20+ pages) manageable.
+// Pass scale=2.0, quality=0.92 for short documents (Other Assets, 1–5 pages) where
+// sharpness matters and storage/memory cost is negligible.
+async function renderPdfToDataURLs(arrayBuffer, scale=1.5, quality=0.82){
   if(!window.pdfjsLib) throw new Error("PDF.js not loaded");
   pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
   const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
   const pages=[];
   for(let i=1;i<=pdf.numPages;i++){
     const page=await pdf.getPage(i);
-    const vp=page.getViewport({scale:1.5});
+    const vp=page.getViewport({scale});
     const canvas=document.createElement("canvas");
     canvas.width=vp.width; canvas.height=vp.height;
     try{
       await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
-      pages.push(canvas.toDataURL("image/jpeg",0.82));
+      pages.push(canvas.toDataURL("image/jpeg",quality));
     }finally{
       // Release the PDF.js internal render state and the canvas backing store
       // immediately after encoding. Without this, a 20-page document at 1.5×
