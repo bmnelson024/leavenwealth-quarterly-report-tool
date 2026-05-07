@@ -54,6 +54,9 @@
   th:first-child { text-align: left; }
   td { padding: 8px; border-bottom: 1px solid #c8e6de; }
   td:not(:first-child) { text-align: right; }
+  .chg-pos { color: #16a34a; font-weight: 600; }
+  .chg-neg { color: #dc2626; font-weight: 600; }
+  .chg-neutral { color: #9ca3af; }
   .occ-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
   .occ-card { background: white; border: 1px solid #c8e6de; border-radius: 8px; padding: 10px 12px; text-align: center; }
   .occ-card.highlight { background: #1a3a35; border-color: #1a3a35; }
@@ -189,6 +192,13 @@ const FILES_PREFIX = "lw_files_";
 const INV_FILES_PREFIX = "lw_invfiles_";
 const VESTMINT_FINANCIALS_PREFIX = "lw_vmfin_";
 const VESTMINT_OTHER_PREFIX = "lw_vmother_";
+// Prefixes for large binary rows excluded from supaBootstrap's bulk fetch.
+// supaFetchLargeKeysForSave loads these on demand per save. Keep in sync:
+// if you add a new large-key prefix, add it here AND in supaFetchLargeKeysForSave.
+const LARGE_KEY_PREFIXES = [
+  CHARTS_PREFIX, INV_CHARTS_PREFIX, BG_CHAMPION_CHARTS_PREFIX,
+  FILES_PREFIX, INV_FILES_PREFIX, VESTMINT_FINANCIALS_PREFIX, VESTMINT_OTHER_PREFIX
+];
 const VM_LLS_PHOTO_KEY   = "_vm_lls";   // Vestmint cover: Liquid Lending Solutions
 const VM_RFF_PHOTO_KEY   = "_vm_rff";   // Vestmint cover: Real Freedom Fund
 const VM_DORAL_PHOTO_KEY = "_vm_doral"; // Vestmint cover: Doral Apartments
@@ -322,20 +332,15 @@ async function supaBootstrap(){
     // Fetch only small metadata rows — exclude large binary data prefixes
     // (chart images, Excel file buffers, PDF pages) which can be hundreds of MB
     // and cause the query to time out. These are loaded on-demand when reports open.
+    // LARGE_KEY_PREFIXES is the single source of truth; update that constant if
+    // a new large-key category is added rather than adding another .not() here.
     const fresh = {};
     const pageSize = 1000;
     let from = 0;
     while(true){
-      const { data, error } = await sb
-        .from(STORE_TABLE)
-        .select("key,value")
-        .not('key', 'like', 'lw_charts_%')
-        .not('key', 'like', 'lw_invcharts_%')
-        .not('key', 'like', 'lw_bgcc_%')
-        .not('key', 'like', 'lw_files_%')
-        .not('key', 'like', 'lw_invfiles_%')
-        .not('key', 'like', 'lw_vmfin_%')
-        .not('key', 'like', 'lw_vmother_%')
+      let q = sb.from(STORE_TABLE).select("key,value");
+      for(const pfx of LARGE_KEY_PREFIXES) q = q.not('key','like',pfx+'%');
+      const { data, error } = await q
         // Belt-and-suspenders: enforce user scoping in the query even though
         // RLS should already restrict rows. Guards against RLS misconfiguration.
         .eq('updated_by', _currentUser.id)
@@ -480,13 +485,21 @@ function dbSet(k,v,onError){
 function dbRemove(k){
   delete _dbCache[k];
   if(_isCacheOnlyKey(k)) return;
+  setAutoSaveStatus('saving');
   const p = sb.from(STORE_TABLE).delete().eq('key',k).then(({error})=>{
-    if(error) console.warn('Supabase delete failed for key:',k,error);
+    if(error){
+      console.warn('Supabase delete failed for key:',k,error);
+      showError('Warning: Could not remove a record from the cloud ("'+k+'"). Your local data is updated but the change may not persist after a reload.');
+    }
   }, err=>{
     console.warn('Supabase delete rejected for key:',k,err);
+    showError('Warning: Could not remove a record from the cloud ("'+k+'"). Your local data is updated but the change may not persist after a reload.');
   });
   _pendingWrites.add(p);
-  p.finally(()=>_pendingWrites.delete(p));
+  p.finally(()=>{
+    _pendingWrites.delete(p);
+    if(_pendingWrites.size===0) setAutoSaveStatus('saved');
+  });
 }
 function dbKeys(){return Object.keys(_dbCache);}
 function downloadBackup(){
@@ -606,6 +619,7 @@ function _makeDefaultState(){
     assetFacts: null,
     prevMetrics: null,
     metrics: null,
+    _incomeAnnualFallback: false,  // true when an income statement fell back to annual totals (~4× too high)
     narratives: { income:"", expenses:"", capex:"", outlook:"" },
     narrativesEdited: false,
     // Per-section toggles for the generated report. Defaults to true for every
@@ -646,7 +660,7 @@ function _makeDefaultState(){
     vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
     vestmintHasProForma: true,
     vestmintBpGreenway: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', rentAtPurchase:'', rentCurrent:'', narrative:'' },
-    vestmintBpBrentVillage: { enabled:false, rentAtPurchase:'', rentCurrent:'', narrative:'' },
+    vestmintBpBrentVillage: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', rentAtPurchase:'', rentCurrent:'', narrative:'' },
     vmReportHTML: null,
     hasProForma: true,      // show "vs. Pro Forma" in single-property chart labels?
     rewritingClaude: false, // true while the Claude narrative rewrite is in-flight
@@ -683,7 +697,7 @@ function applyInvFiles(props,serialized){(props||[]).forEach(p=>{const s=seriali
 function currentSaveKey(){const isInv=state.source==='investment'||state.source==='vestmint';const name=isInv?(state.investmentName||state.source||"investment"):(state.propertyName||"unnamed");return saveKey(name,state.currentQuarter||"unknown");}
 // Returns all single-property saves that have metrics saved
 function getSinglePropertySaves(){
-  return getSavesIndex().filter(s=>s.source!=='investment').map(s=>{
+  return getSavesIndex().filter(s=>s.source!=='investment'&&s.source!=='vestmint').map(s=>{
     try{const d=JSON.parse(dbGet(SAVE_PREFIX+s.key)||"null");return d&&d.metrics?{key:s.key,propertyName:s.propertyName,quarter:s.quarter,metrics:d.metrics}:null;}catch(e){return null;}
   }).filter(Boolean);
 }
@@ -935,15 +949,23 @@ async function saveProgressAsync(options){
   showToast("✓ Progress saved");
   setAutoSaveStatus('saved');
 }
-// Cheap per-file hash: concatenates key + byte length so an unchanged file
-// set produces an identical string and we can skip re-uploading it.
+// Per-file hash: key + content fingerprint so two different files of the same
+// byte-length don't hash identically and cause a silent save skip.
+// Samples ~200 evenly-spaced characters plus the length for speed on large CSVs.
 // For investment mode, combines all per-property file sets.
 const _lastFilesHashByKey = {};
+function _contentFingerprint(s){
+  const n=s.length;
+  let h=n>>>0;
+  const step=Math.max(1,Math.floor(n/200));
+  for(let i=0;i<n;i+=step) h=Math.imul(h,31)+s.charCodeAt(i)>>>0;
+  return h.toString(36);
+}
 function _hashFileSet(filesOrProps, isInv){
   const _one = (files) => Object.entries(files||{})
     .map(([k,v])=>{
       if(!v) return k+':0';
-      if(typeof v === 'string') return k+':s'+v.length;
+      if(typeof v === 'string') return k+':s'+_contentFingerprint(v);
       if(v instanceof ArrayBuffer) return k+':b'+v.byteLength;
       return k+':?';
     }).sort().join('|');
@@ -1082,7 +1104,9 @@ async function loadSave(key){
       metrics:data.metrics||null, narratives:data.narratives||{income:"",expenses:"",capex:"",outlook:""},
       charts:{...emptyCharts,...(loadChartsForKey(key)||{})}, propertyPhoto:restoredPhoto,
       step:data.step>=0?data.step:1,   // allow step 0 (was incorrectly forced to >=1 before)
-      files:{income:null,rr1:null,rr2:null,rr3:null,leasing:null,leasingSummary:null,renewalSummary:null,delinquency:null,rentEngine:null,capexDetail:null,balanceSheet:null,...(loadFilesForKey(key)||{})},
+      // Strip undefined values from loadFilesForKey so missing file slots stay null
+      // (a key present with value undefined would silently shadow the null default above).
+      files:{income:null,rr1:null,rr2:null,rr3:null,leasing:null,leasingSummary:null,renewalSummary:null,delinquency:null,rentEngine:null,capexDetail:null,balanceSheet:null,...Object.fromEntries(Object.entries(loadFilesForKey(key)||{}).filter(([,v])=>v!==undefined))},
       reportHTML:null, generating:false,
       // Investment mode fields (may be absent in older saves — default gracefully)
       investmentName:data.investmentName||"",
@@ -1282,10 +1306,18 @@ function confirmAndAdvance(nextStep){
   showSavePrompt(()=>{state.step=nextStep;render();});
 }
 function confirmAndGenerate(){
+  if(state._incomeAnnualFallback){
+    showError("⚠️ Report generation is blocked: the income statement fell back to annual totals (~4× too high). Re-upload the correct trailing-12-month file or fix the Quarter field, then click Process Data again.");
+    return;
+  }
   if(_flushAndCheckSaved()){generateReport();return;}
   showSavePrompt(()=>generateReport());
 }
 function confirmAndGenerateInv(){
+  if(state._incomeAnnualFallback){
+    showError("⚠️ Report generation is blocked: one or more income statements fell back to annual totals (~4× too high). Re-upload the correct trailing-12-month files or fix the Quarter field, then click Process Data again.");
+    return;
+  }
   if(_flushAndCheckSaved()){generateInvestmentReport();return;}
   showSavePrompt(()=>generateInvestmentReport());
 }
@@ -1353,6 +1385,9 @@ function selectSource(src){
   state.invCharts = {inv_operating_income:null,inv_operating_expense:null,inv_income_by_property:null,inv_expense_by_property:null,inv_income_vs_expense:null,inv_noi:null,inv_noi_by_property:null,inv_utility:null,inv_lease_expirations:null,inv_rent_growth:null,inv_occupancy_rate:null,inv_occupancy_by_property:null};
   state.generating = false;
   state.step = 0;
+  // Reset save-prompt gate — must not carry over from a prior report's save.
+  // Without this, "Generate Report" skips the save prompt on the very next report.
+  state._savedThisStep = false;
   // Always clear investment identity fields — stale investmentName / invProperties
   // from a prior report bleed into the new form if these are left intact.
   state.investmentName = "";
@@ -1370,7 +1405,7 @@ function selectSource(src){
   state.vestmintSections = {fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true};
   state.vestmintHasProForma = true;
   state.vestmintBpGreenway = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''};
-  state.vestmintBpBrentVillage = {enabled:false,rentAtPurchase:'',rentCurrent:'',narrative:''};
+  state.vestmintBpBrentVillage = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''};
   state.vmReportHTML = null;
   render();
 }
@@ -1397,7 +1432,7 @@ function renderHome(){
       </div>
       <div style="display:flex;gap:8px;flex-shrink:0">
         <button onclick="downloadBackup()" style="background:#f59e0b;color:white;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">⬇ Download Now</button>
-        <button onclick="localStorage.setItem('lw_last_backup_date','${_today}');document.getElementById('backup-reminder-banner').style.display='none'" style="background:white;color:#92400e;border:1px solid #fcd34d;border-radius:7px;padding:8px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">Remind me later</button>
+        <button onclick="localStorage.setItem('lw_last_backup_date','${attrJs(_today)}');document.getElementById('backup-reminder-banner').style.display='none'" style="background:white;color:#92400e;border:1px solid #fcd34d;border-radius:7px;padding:8px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">Remind me later</button>
       </div>
     </div>`:''}
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px">
@@ -1555,8 +1590,10 @@ const parseBuildiumDelinquency = text => {
   // "Grand total for all properties"; AppFolio-style exports often emit a
   // bare "Total" as the final row — either should be used verbatim instead
   // of summing the details (which would double-count the Total).
+  // Use the LAST matching "Total" row so per-property subtotals (which appear
+  // earlier in the export) can't be mistaken for the grand total.
   const grand = rows.find(r => /^grand\s+total\b/i.test(firstVal(r)))
-             || rows.find(r => /^total\s*$/i.test(firstVal(r)));
+             || [...rows].reverse().find(r => /^total\s*$/i.test(firstVal(r)));
   if (grand) {
     const v = parseCur(grand[balanceKey] || 0);
     if (v > 0) return v;
@@ -1578,7 +1615,17 @@ const parseBuildiumDelinquency = text => {
 // Robust date parser: handles ISO, MM/DD/YYYY, DD-MON-YYYY (e.g. 01-JAN-2026), YYYY/MM/DD.
 const parseDate = str => {
   if (!str || !str.trim()) return null;
-  // Try native parse first (handles ISO 8601, MM/DD/YYYY, "Jan 1 2026", etc.)
+  // Parse MM/DD/YYYY explicitly BEFORE calling new Date() — the native parser
+  // treats "01/02/2025" as Jan 2 in some locales and Feb 1 in others.
+  const mdy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) {
+    const mo = parseInt(mdy[1]), day = parseInt(mdy[2]), yr = parseInt(mdy[3]);
+    if (mo >= 1 && mo <= 12 && day >= 1 && day <= 31) {
+      const dm = new Date(yr, mo-1, day);
+      if (!isNaN(dm) && dm.getMonth() === mo-1) return dm;
+    }
+  }
+  // Try native parse (handles ISO 8601, "Jan 1 2026", named-month strings, etc.)
   let d = new Date(str);
   if (!isNaN(d)) return d;
   // Try DD-MON-YYYY or DD/MON/YYYY (e.g. 01-JAN-2026)
@@ -1887,7 +1934,9 @@ const getQMonths = q => {
 };
 const nextQtr = q => {
   const m = (q||"").match(/[Qq]\s*([1-4])[\s\/\-]*(\d{4})/);
-  if(!m) return "next quarter";
+  // When the quarter string is malformed or empty, return a graceful placeholder
+  // rather than the literal "next quarter" which reads oddly in narrative text.
+  if(!m) return q ? "the coming quarter" : "the coming quarter";
   const qNum = parseInt(m[1]);
   const yr = parseInt(m[2]);
   return qNum===4 ? `Q1 ${yr+1}` : `Q${qNum+1} ${yr}`;
@@ -2095,7 +2144,18 @@ function fixInvPropertyNameRefs(text, propertyMetrics){
     result = result.replace(/\bproperty\s+2\b/gi, b.name);
     result = result.replace(/\bthe\s+first\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, a.name);
     result = result.replace(/\bthe\s+second\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, b.name);
-    result = result.replace(/\bthe\s+other\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, b.name);
+    // "the other property" → b.name, but only when b.name isn't already present
+    // in the surrounding context (guards against double-substitution when Claude
+    // says "...b.name..., while the other property..." and both should be b.name).
+    result = result.replace(/\bthe\s+other\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, match => {
+      // Find the sentence containing this match by searching backward for a period/newline
+      const idx = result.indexOf(match);
+      const sentenceStart = Math.max(0, result.lastIndexOf('.', idx - 1) + 1);
+      const sentenceEnd = Math.min(result.length, result.indexOf('.', idx) + 1) || result.length;
+      const sentence = result.slice(sentenceStart, sentenceEnd);
+      // Only replace if b.name doesn't already appear in the same sentence
+      return sentence.includes(b.name) ? match : b.name;
+    });
   }
 
   // 3. Three-or-more property portfolio
@@ -3284,6 +3344,26 @@ function uploadBpCurrentRent(){
   }; inp.click();
 }
 
+// Shared AppFolio renewal-summary parser — used by both the single-property
+// and investment paths so both get the same 3-regex + 2-fallback logic.
+// Returns the parsed renewal count (0 if nothing could be detected).
+function _parseAppFolioRenewalCount(renewalText){
+  if(!renewalText) return 0;
+  const totalMatch = renewalText.match(/Total\s+(\d+)\s+Offers/i)
+    || renewalText.match(/Total\s+Offers[:\s]+(\d+)/i)
+    || renewalText.match(/(\d+)\s+Total\s+Offers/i);
+  if(totalMatch) return parseInt(totalMatch[1])||0;
+  // Fallback 1: rows with Status = "Renewed"
+  const renewalRows=parseDelim(renewalText);
+  const renewedCount=renewalRows.filter(r=>/renewed/i.test(r["Status"]||"")).length;
+  if(renewedCount>0) return renewedCount;
+  // Fallback 2: numeric Count/Renewals/Offers column
+  let total=0;
+  const colNames=["Count","Renewals","Offers","# Renewals","Total"];
+  renewalRows.forEach(r=>{for(const col of colNames){const v=parseInt(r[col]||"");if(!isNaN(v)&&v>0){total+=v;break;}}});
+  return total;
+}
+
 function parsePropertyMetrics(prop){
   // Income statement is optional per property — aligns with single-property
   // mode. If missing, all financial fields stay at zero and the property
@@ -3295,13 +3375,17 @@ function parsePropertyMetrics(prop){
     if(prop.source==='appfolio'){
       parsed = parseQuarterFromExcel(prop.files.income, state.currentQuarter);
       if(!parsed){
-        showError("Warning: Could not find "+state.currentQuarter+" columns in income statement for \""+prop.name+"\" — using annual totals instead, which may be ~4× higher than quarterly figures. Verify the file is a trailing 12-month export and the quarter is set correctly.");
+        showError("⚠️ Could not find "+state.currentQuarter+" columns in the income statement for \""+prop.name+"\" — falling back to ANNUAL totals, which are ~4× too high. Fix the file or quarter label before generating the report.");
+        state._incomeAnnualFallback = true;
         try{parsed=parseExcel(prop.files.income);}catch(e){parsed=null;}
       }
     } else {
       parsed = state.currentQuarter ? parseQuarterFromExcel(prop.files.income, state.currentQuarter) : null;
       if(!parsed){
-        if(state.currentQuarter) showError("Warning: Could not find "+state.currentQuarter+" columns in income statement for \""+prop.name+"\" — using annual totals instead, which may be ~4× higher than quarterly figures. Verify the file is a trailing 12-month export and the quarter is set correctly.");
+        if(state.currentQuarter){
+          showError("⚠️ Could not find "+state.currentQuarter+" columns in the income statement for \""+prop.name+"\" — falling back to ANNUAL totals, which are ~4× too high. Fix the file or quarter label before generating the report.");
+          state._incomeAnnualFallback = true;
+        }
         try{parsed=parseExcel(prop.files.income);}catch(e){parsed=null;}
       }
     }
@@ -3339,9 +3423,7 @@ function parsePropertyMetrics(prop){
     const lt=lr.find(r=>/^total/i.test(r["Unit Type"]||""));
     if(lt){newLeases=parseInt(lt["Leased"]||0)||0;inquiries=parseInt(lt["Inquiries Received"]||0)||0;applications=parseInt(lt["Applications Received"]||0)||0;}
     else{lr.forEach(r=>{newLeases+=parseInt(r["Leased"]||0)||0;inquiries+=parseInt(r["Inquiries Received"]||0)||0;applications+=parseInt(r["Applications Received"]||0)||0;});}
-    const rt=prop.files.renewalSummary||"";
-    const rm=rt.match(/Total\s+(\d+)\s+Offers/i);
-    if(rm)renewals=parseInt(rm[1])||0;else renewals=parseDelim(rt).filter(r=>/renewed/i.test(r["Status"]||"")).length;
+    renewals=_parseAppFolioRenewalCount(prop.files.renewalSummary||"");
   } else {
     occ1=calcOcc(prop.files.rr1,"rr1"); occ2=calcOcc(prop.files.rr2,"rr2"); occ3=calcOcc(prop.files.rr3,"rr3");
     const fr=parseDelim(skipMetaRows(prop.files.rr3||"")).filter(isBuildiumUnitRow);
@@ -3368,7 +3450,11 @@ function parsePropertyMetrics(prop){
       applications=pp.reduce((s,r)=>s+(parseInt(r["Apps Submitted"])||0),0);
     }
   }
-  const occupancy=Math.round((occ1+occ2+occ3)/3);
+  // Only average over months that have a rent roll uploaded — dividing by 3
+  // when only 1 rent roll exists would report e.g. 95% → 32%.
+  const _occFiles=[prop.files.rr1,prop.files.rr2,prop.files.rr3];
+  const _occPresent=[occ1,occ2,occ3].filter((_,i)=>!!_occFiles[i]);
+  const occupancy=_occPresent.length?Math.round(_occPresent.reduce((s,v)=>s+v,0)/_occPresent.length):0;
   // NOTE: occupancy above is a simple per-month average (not unit-weighted across properties).
   // For a unit-weighted portfolio average, aggregate at processInvestmentData() level using unitCount.
   const unitCount=prop.source==='appfolio'
@@ -3430,6 +3516,7 @@ function refreshUnitCurrentRents(){
 function processInvestmentData(opts){
   try{
     clearError();
+    state._incomeAnnualFallback = false;  // reset — re-run may fix the file
     window._propTaxMissingProps=[];  // reset at start so re-runs don't accumulate duplicates
     const results=[];
     const propErrors=[];
@@ -4411,11 +4498,19 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 @media print{@page{margin:0;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{background:white;}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page;}.page:last-child{page-break-after:auto;}img{box-shadow:none;}}`;
 
   // Fund overview text → convert line-breaks + bullet chars to HTML
+  // Strip dangerous constructs from fund-overview HTML before injecting into the
+  // report iframe — <script> tags, event attributes (onclick, onload, etc.), and
+  // javascript: hrefs. Low-risk for a single trusted operator but good hygiene.
+  const _sanitizeOverviewHtml=(html)=>html
+    .replace(/<script[\s\S]*?<\/script>/gi,"")
+    .replace(/<iframe[\s\S]*?(?:<\/iframe>|>)/gi,"")
+    .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi,"")
+    .replace(/(href|src)\s*=\s*["']?javascript:[^"'\s>]*/gi,"$1=\"#\"");
   const fmtOverview=(raw)=>{
     if(!raw) return "";
-    // If the content contains HTML tags (from the rich-text editor), pass through directly.
+    // If the content contains HTML tags (from the rich-text editor), sanitize then pass through.
     // Otherwise fall back to plain-text escaping for legacy saves.
-    if(/<[a-z][\s\S]*>/i.test(raw)) return raw;
+    if(/<[a-z][\s\S]*>/i.test(raw)) return _sanitizeOverviewHtml(raw);
     return escapeHtml(raw).replace(/\n/g,"<br>");
   };
 
@@ -5152,6 +5247,7 @@ function calcOccAppFolio(csv){
 function processDataAppFolio() {
   try {
     clearError();
+    state._incomeAnnualFallback = false;  // reset — re-run may fix the file
     // Income statement is now optional — if missing, all financial fields stay
     // at zero and the Income Statement / Snapshot tiles auto-hide downstream.
     let totalIncome = 0, totalExpense = 0, noi = 0, capex = 0;
@@ -5177,7 +5273,10 @@ function processDataAppFolio() {
     const occ1 = calcOccAppFolio(state.files.rr1);
     const occ2 = calcOccAppFolio(state.files.rr2);
     const occ3 = calcOccAppFolio(state.files.rr3);
-    const occupancy = Math.round((occ1 + occ2 + occ3) / 3);
+    // Only average over months that have a rent roll uploaded — dividing by 3
+    // when only 1 rent roll exists would report e.g. 95% → 32%.
+    const _occPresent=[state.files.rr1,state.files.rr2,state.files.rr3].reduce((a,f,i)=>f?[...a,[occ1,occ2,occ3][i]]:a,[]);
+    const occupancy=_occPresent.length?Math.round(_occPresent.reduce((s,v)=>s+v,0)/_occPresent.length):0;
     // ── Rent Roll — Loss to Lease & Rent Roll display ────────────────────────
     const finalRows = parseDelim(state.files.rr3).filter(r => {
       const u = (r["Unit"]||"").trim();
@@ -5242,28 +5341,9 @@ function processDataAppFolio() {
       });
     }
     // ── Renewal Summary ──────────────────────────────────────────────────────
-    // Format varies: "Total X Offers", "Total Offers: X", tabular with Count/Renewals column
-    let renewals = 0;
-    const renewalText = state.files.renewalSummary||"";
-    const totalMatch = renewalText.match(/Total\s+(\d+)\s+Offers/i)
-      || renewalText.match(/Total\s+Offers[:\s]+(\d+)/i)
-      || renewalText.match(/(\d+)\s+Total\s+Offers/i);
-    if (totalMatch) {
-      renewals = parseInt(totalMatch[1])||0;
-    } else {
-      // Fallback 1: count rows with Status = "Renewed"
-      const renewalRows = parseDelim(renewalText);
-      const renewedCount = renewalRows.filter(r=>/renewed/i.test(r["Status"]||"")).length;
-      if(renewedCount>0){ renewals=renewedCount; }
-      else {
-        // Fallback 2: sum a numeric "Count", "Renewals", or "Offers" column
-        const colNames=["Count","Renewals","Offers","# Renewals","Total"];
-        renewalRows.forEach(r=>{
-          for(const col of colNames){ const v=parseInt(r[col]||""); if(!isNaN(v)&&v>0){renewals+=v;break;} }
-        });
-        if(renewals===0) showError("Warning: Could not parse renewal count from the Renewal Summary file — renewals will show as 0. Verify the file format.");
-      }
-    }
+    // Shared helper tries 3 regex variants then 2 tabular fallbacks (Status="Renewed", numeric column).
+    let renewals = _parseAppFolioRenewalCount(state.files.renewalSummary||"");
+    if(renewals===0 && state.files.renewalSummary) showError("Warning: Could not parse renewal count from the Renewal Summary file — renewals will show as 0. Verify the file format.");
     // ── Cash on Hand (manual entry) ──────────────────────────────────────────
     // Previously pulled from the Trial Balance (GL 1150) or Bank file, but that
     // only covered the operating account. Brian now enters this manually from
@@ -5321,13 +5401,20 @@ function processDataAppFolio() {
 function processBuildium() {
   try {
     clearError();
+    state._incomeAnnualFallback = false;  // reset — re-run may fix the file
     // Income statement is now optional — if missing, all financial fields stay
     // at zero and the Income Statement / Snapshot tiles auto-hide downstream.
     let totalIncome = 0, totalExpense = 0, noi = 0, capex = 0;
     let capexItems = [], incomeRows = [], monthCols = [];
     if (state.files.income) {
       let _qParsed = state.currentQuarter ? parseQuarterFromExcel(state.files.income, state.currentQuarter) : null;
-      if (!_qParsed) { try { _qParsed = parseExcel(state.files.income); } catch (e) { _qParsed = null; } }
+      if (!_qParsed) {
+        if(state.currentQuarter){
+          showError("⚠️ Could not find "+state.currentQuarter+" columns in the income statement — falling back to ANNUAL totals, which are ~4× too high. Fix the file or quarter label before generating the report.");
+          state._incomeAnnualFallback = true;
+        }
+        try { _qParsed = parseExcel(state.files.income); } catch (e) { _qParsed = null; }
+      }
       if (_qParsed) {
         ({ totalIncome, totalExpense, noi, capex, capexItems, incomeRows, monthCols } = _qParsed);
         if (!totalIncome && !totalExpense) {
@@ -5344,7 +5431,10 @@ function processBuildium() {
       clearWarning();
     }
     const occ1=calcOcc(state.files.rr1,"rr1"), occ2=calcOcc(state.files.rr2,"rr2"), occ3=calcOcc(state.files.rr3,"rr3");
-    const occupancy=Math.round((occ1+occ2+occ3)/3);
+    // Only average over months that have a rent roll uploaded — dividing by 3
+    // when only 1 rent roll exists would report e.g. 95% → 32%.
+    const _occPresent=[state.files.rr1,state.files.rr2,state.files.rr3].reduce((a,f,i)=>f?[...a,[occ1,occ2,occ3][i]]:a,[]);
+    const occupancy=_occPresent.length?Math.round(_occPresent.reduce((s,v)=>s+v,0)/_occPresent.length):0;
     const _rrAllRaw=parseDelim(skipMetaRows(state.files.rr3||""));
     const _rrIsTrailer=id=>/^(total for|grand total|subtotal|summary)\b/i.test(id||"");
     const _rrCutoff=_rrAllRaw.findIndex(r=>_rrIsTrailer((r["Unit"]||r["unit"]||"").trim()));
@@ -7046,12 +7136,23 @@ function tryAutoFillPropertyName(csvText){
 }
 function showError(msg){
   const el=document.getElementById("error-box");
-  el.textContent=msg; el.style.display=msg?"block":"none";
+  if(!msg){ el.textContent=""; el.style.display="none"; return; }
+  // Accumulate rather than overwrite — multi-property runs can surface warnings
+  // for several properties in sequence; only the last one would show otherwise.
+  const prev=el.textContent;
+  el.textContent=prev?prev+"\n"+msg:msg;
+  el.style.display="block";
 }
-function showWarning(msg){
+// showWarning accepts trusted HTML markup (e.g. <strong> in the property-tax
+// message). All callers MUST escape any user-derived values before calling it.
+// For plain-text warnings use showWarningText() which handles escaping automatically.
+function showWarning(html){
   const el=document.getElementById("warning-box");
   if(!el) return;
-  el.innerHTML=msg; el.style.display=msg?"block":"none";
+  el.innerHTML=html; el.style.display=html?"block":"none";
+}
+function showWarningText(text){
+  showWarning(text ? escapeHtml(text) : "");
 }
 function clearWarning(){ showWarning(""); }
 function clearError(){ showError(""); }
@@ -7084,7 +7185,9 @@ function propTaxStatus(incomeRows){
 function warnIfNoPropTax(incomeRows, propertyName){
   const status = propTaxStatus(incomeRows);
   if(status === "ok"){
-    clearWarning();
+    // Property taxes found — do NOT call clearWarning() here.
+    // A delinquency or other warning may already be displayed; wiping it
+    // silently just because taxes look fine would hide a separate issue.
   } else {
     const who = propertyName ? `<strong>${escapeHtml(propertyName)}</strong>` : "this property";
     const detail = status === "zero"
@@ -7390,6 +7493,10 @@ function render(){
       </div>
     </div>`).join("");
   const el=document.getElementById("step-content");
+  // Clear any lingering errors from a prior step so they don't persist into
+  // the next step's view. Investment and VestMint paths do this explicitly;
+  // the single-property path was previously missing this call.
+  clearError();
   // Required-file lists and the "Still needed" warning were removed — all
   // uploads are now optional, with a confirm modal (processDataWithConfirm)
   // catching accidental omissions of core files per source.
@@ -7402,7 +7509,7 @@ function render(){
             <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Select Data Source</h2>
             <p style="font-size:13px;color:#5a8070">Choose which property management platform your reports are exported from.</p>
           </div>
-          <button onclick="(async()=>{this.disabled=true;this.textContent='Syncing…';try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){this.disabled=false;this.textContent='↻ Sync Reports';}})();" style="font-size:12px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1.5px solid #c8e6de;border-radius:6px;padding:7px 14px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif" title="Re-sync your saved reports from the cloud">↻ Sync Reports</button>
+          <button id="step-sync-btn" onclick="(async()=>{const b=document.getElementById('step-sync-btn');if(b){b.disabled=true;b.textContent='Syncing…';}try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){const b2=document.getElementById('step-sync-btn');if(b2){b2.disabled=false;b2.textContent='↻ Sync Reports';}}})();" style="font-size:12px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1.5px solid #c8e6de;border-radius:6px;padding:7px 14px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif" title="Re-sync your saved reports from the cloud">↻ Sync Reports</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;grid-auto-rows:auto">
           <div class="home-card" style="flex-direction:column;align-items:flex-start;gap:10px;cursor:pointer;padding:20px 20px 16px" onclick="selectSource('buildium')">
@@ -7651,6 +7758,11 @@ function render(){
       </div>`;
     }
   }
+  else if(state.step===1 && !state.metrics){
+    // Race guard: step advanced to 1 but processData() hasn't resolved yet.
+    // Show a neutral placeholder rather than leaving stale HTML from step 0.
+    el.innerHTML=`<p style="color:#5a8070;font-size:13px;padding:12px">Processing data…</p>`;
+  }
   else if(state.step===1 && state.metrics){
     const m=state.metrics;
     const prev=state.prevMetrics||PREV_SAFE;
@@ -7666,7 +7778,7 @@ function render(){
                ["Operating Expenses",fmt(prev.expenses),fmt(m.totalExpense),pct(m.totalExpense,prev.expenses)],
                ["NOI",fmt(prev.noi),fmt(m.noi),pct(m.noi,prev.noi)],
                ["Capex",fmt(prev.capex),fmt(m.capex),pct(m.capex,prev.capex)]
-              ].map(([l,q4,q1,chg])=>`<tr><td>${l}</td><td>${q4}</td><td><strong>${q1}</strong></td><td class="${chg.startsWith("+")?"chg-pos":"chg-neg"}">${chg}</td></tr>`).join("")}
+              ].map(([l,q4,q1,chg])=>`<tr><td>${l}</td><td>${q4}</td><td><strong>${q1}</strong></td><td class="${chg==='N/A'?'chg-neutral':chg.startsWith('+')?"chg-pos":"chg-neg"}">${chg}</td></tr>`).join("")}
           </tbody>
         </table>
       </div>
