@@ -335,6 +335,9 @@ async function supaBootstrap(){
         .not('key', 'like', 'lw_invfiles_%')
         .not('key', 'like', 'lw_vmfin_%')
         .not('key', 'like', 'lw_vmother_%')
+        // Belt-and-suspenders: enforce user scoping in the query even though
+        // RLS should already restrict rows. Guards against RLS misconfiguration.
+        .eq('updated_by', _currentUser.id)
         .range(from, from + pageSize - 1)
         .abortSignal(abortCtrl.signal);
       if(error) throw error;
@@ -388,7 +391,9 @@ async function supaBootstrap(){
     // They pushed a resolve() into _bootstrapDoneCallbacks instead of
     // getting undefined back; fire them now so their awaits can resume.
     const _doneCbs = _bootstrapDoneCallbacks.splice(0);
-    for(const cb of _doneCbs) try{cb();}catch(e){}
+    for(const cb of _doneCbs) try{cb();}catch(e){
+      console.error('[QRB] bootstrap callback threw — this may leave the UI in a broken state:', e);
+    }
     if(_bootstrapRetryPending){
       _bootstrapRetryPending=false;
       // A second caller arrived while we were in flight — run again now that
@@ -399,7 +404,10 @@ async function supaBootstrap(){
         // the home screen mid-workflow.
         if(state.showHome){
           state.showHome=getSavesIndex().length>0;
-          try{render();}catch(e){}
+          try{render();}catch(e){
+            console.error('[QRB] render() threw during deferred bootstrap re-render:', e);
+            showError("The app encountered an error while refreshing. Please reload the page.");
+          }
         }
       }).catch(e=>console.warn('[QRB] Deferred bootstrap failed:',e)),50);
     }
@@ -429,7 +437,8 @@ async function supaFetchLargeKeysForSave(saveKey){
     const { data: otherData, error: otherError } = await sb
       .from(STORE_TABLE)
       .select("key,value")
-      .like('key', VESTMINT_OTHER_PREFIX+saveKey+'_%');
+      .like('key', VESTMINT_OTHER_PREFIX+saveKey+'_%')
+      .eq('updated_by', _currentUser.id);
     if(otherError){ console.warn('[QRB] supaFetchLargeKeysForSave other-assets error:',otherError); }
     else if(otherData) for(const row of otherData) _dbCache[row.key]=row.value;
     console.log('[QRB] supaFetchLargeKeysForSave: done for '+saveKey);
@@ -503,7 +512,7 @@ function restoreBackup(){
           showError('Backup file format not recognized — expected a JSON object of saved keys.');
           return;
         }
-        const ALLOWED_PREFIXES=[SAVE_PREFIX,CHARTS_PREFIX,INV_CHARTS_PREFIX,FILES_PREFIX,INV_FILES_PREFIX,'lw_photo_','lw_assetfacts_',BG_CHAMPION_CHARTS_PREFIX,VESTMINT_FINANCIALS_PREFIX];
+        const ALLOWED_PREFIXES=[SAVE_PREFIX,CHARTS_PREFIX,INV_CHARTS_PREFIX,FILES_PREFIX,INV_FILES_PREFIX,'lw_photo_','lw_assetfacts_',BG_CHAMPION_CHARTS_PREFIX,VESTMINT_FINANCIALS_PREFIX,VESTMINT_OTHER_PREFIX];
         const ALLOWED_EXACT=new Set([SAVES_INDEX_KEY]);
         const entries=Object.entries(data);
         const bad=[];
@@ -554,6 +563,26 @@ function restoreBackup(){
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // ─── STATE ────────────────────────────────────────────────────────────────────
+
+// Single source of truth for the businessPlan default object.
+// Previously this object was copy-pasted at four sites (state default, save
+// payload fallback, load fallback, and reset) and the copies had drifted —
+// bpCurrentRentParsed was present in the state default but absent from the
+// other three. Using this factory everywhere keeps them in sync.
+function makeFreshBusinessPlan(){
+  return {
+    enabled: false,
+    locLimit: '', locDrawn: '', locRemaining: '',
+    unitsCompleted: '', unitsRemaining: '',
+    totalBudget: '', spentToDate: '',
+    narrative: '', launchRentPerUnit: '',
+    bpCapexParsed: null,
+    bpLaunchRentParsed: null,
+    bpCurrentRentParsed: null,
+    bpLaunchRentOverrides: {}
+  };
+}
+
 // Factory — returns a fresh default-state tree. Using a function (not a constant)
 // so every reset produces independent nested objects/arrays and no shared refs.
 function _makeDefaultState(){
@@ -601,7 +630,7 @@ function _makeDefaultState(){
     prevOccupancyInput: "",   // manually entered or auto-loaded prior quarter occupancy %
     isInceptionReport: false, // true = first quarter for this property; suppresses QoQ warnings & adjusts narrative
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
-    businessPlan: { enabled:false, locLimit:"", locDrawn:"", locRemaining:"", unitsCompleted:"", unitsRemaining:"", totalBudget:"", spentToDate:"", narrative:"", launchRentPerUnit:"", bpCapexParsed:null, bpLaunchRentParsed:null, bpLaunchRentOverrides:{}, bpCurrentRentParsed:null },
+    businessPlan: makeFreshBusinessPlan(),
     invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
     _bpRentRefreshing: false, // guards the auto-refresh timeout in the Business Plan unit rent table
     invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
@@ -611,8 +640,8 @@ function _makeDefaultState(){
     vestmintOtherAssets: [],    // [{id, name, pages:[]}] — dynamically added investment sections (pages = data URL arrays from uploaded PDFs)
     vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
     vestmintHasProForma: true,
-    vestmintBpGreenway: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', locLimit:'', locDrawn:'', locRemaining:'', narrative:'' },
-    vestmintBpBrentVillage: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', locLimit:'', locDrawn:'', locRemaining:'', narrative:'' },
+    vestmintBpGreenway: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', rentAtPurchase:'', rentCurrent:'', narrative:'' },
+    vestmintBpBrentVillage: { enabled:false, rentAtPurchase:'', rentCurrent:'', narrative:'' },
     vmReportHTML: null,
     hasProForma: true,      // show "vs. Pro Forma" in single-property chart labels?
     rewritingClaude: false, // true while the Claude narrative rewrite is in-flight
@@ -738,6 +767,10 @@ function rehydrateMetricsIfNeeded(){
     reportHTML: state.reportHTML,
     prevMetrics: state.prevMetrics,
     narrativesEdited: state.narrativesEdited,
+    // processDataAppFolio / processBuildium can mutate these as side effects;
+    // snapshot them so a silent rehydrate never clobbers the user's settings.
+    isInceptionReport: state.isInceptionReport,
+    cashOnHandInput: state.cashOnHandInput,
   };
   _silentRehydrate = true;
   try {
@@ -756,6 +789,8 @@ function rehydrateMetricsIfNeeded(){
   state.reportHTML = snap.reportHTML;
   state.prevMetrics = snap.prevMetrics;
   state.narrativesEdited = snap.narrativesEdited;
+  state.isInceptionReport = snap.isInceptionReport;
+  state.cashOnHandInput = snap.cashOnHandInput;
   return !!(state.metrics && state.metrics.rentRollRows && state.metrics.incomeRows);
 }
 // saveProgress options:
@@ -817,15 +852,15 @@ function saveProgress(options){
     invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
     hasProForma:state.hasProForma!==false,
     invHasProForma:state.invHasProForma!==false,
-    businessPlan:state.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}},
+    businessPlan:{...makeFreshBusinessPlan(),...(state.businessPlan||{})},
     suppIncome:state.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
     bgChampionCustom:{commentary:(state.bgChampionCustom&&state.bgChampionCustom.commentary)||""},
     vestmintFundOverview:state.vestmintFundOverview||"",
     vestmintOtherAssets:(state.vestmintOtherAssets||[]).map(a=>({id:a.id,name:a.name})),
     vestmintSections:state.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
     vestmintHasProForma:state.vestmintHasProForma!==false,
-    vestmintBpGreenway:state.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
-    vestmintBpBrentVillage:state.vestmintBpBrentVillage||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
+    vestmintBpGreenway:state.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''},
+    vestmintBpBrentVillage:state.vestmintBpBrentVillage||{enabled:false,rentAtPurchase:'',rentCurrent:'',narrative:''},
     narrativesEdited:!!state.narrativesEdited,
     invNarrativesEdited:!!state.invNarrativesEdited,
     savedAt:new Date().toISOString()
@@ -844,17 +879,23 @@ function saveProgress(options){
     // the same multi-MB spreadsheet when only metadata changed.
     const filesHash = _hashFileSet(isInv ? state.invProperties : state.files, isInv);
     const filesChanged = filesHash !== _lastFilesHashByKey[key];
+    // If the file upload fails asynchronously, clear the cached hash so the
+    // next autosave retries rather than assuming the files are already persisted.
+    const onFilePersistErr = err => {
+      delete _lastFilesHashByKey[key];
+      onPersistErr(err);
+    };
     if(isInv){
       saveInvChartsForKey(key,state.invCharts,onPersistErr);
       saveBgChampionChartsForKey(key,(state.bgChampionCustom&&state.bgChampionCustom.charts)||[],onPersistErr);
-      if(filesChanged) saveInvFilesForKey(key,state.invProperties,onPersistErr);
+      if(filesChanged) saveInvFilesForKey(key,state.invProperties,onFilePersistErr);
       if(state.source==='vestmint'){
         saveVestmintFinancialsForKey(key,state.vestmintFinancials||[],onPersistErr);
         (state.vestmintOtherAssets||[]).forEach(a=>saveVestmintOtherAssetPagesForKey(key,a.id,a.pages||[],onPersistErr));
       }
     } else {
       saveChartsForKey(key,state.charts,onPersistErr);
-      if(filesChanged) saveFilesForKey(key,state.files,onPersistErr);
+      if(filesChanged) saveFilesForKey(key,state.files,onFilePersistErr);
     }
     if(filesChanged) _lastFilesHashByKey[key] = filesHash;
     dbSet(SAVE_PREFIX+key,JSON.stringify(data),onPersistErr);
@@ -1050,7 +1091,10 @@ async function loadSave(key){
       invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
       hasProForma:data.hasProForma!==false,
       invHasProForma:data.invHasProForma!==false,
-      businessPlan:data.businessPlan||{enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}},
+      // Spread makeFreshBusinessPlan() first so any fields added after a save
+      // was created (e.g. bpCurrentRentParsed) get a safe null default rather
+      // than undefined when loading older saves.
+      businessPlan:{...makeFreshBusinessPlan(),...(data.businessPlan||{})},
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       vestmintFundOverview:data.vestmintFundOverview||"",
@@ -1058,8 +1102,8 @@ async function loadSave(key){
       vestmintOtherAssets:(data.vestmintOtherAssets||[]).map(a=>({...a, pages:loadVestmintOtherAssetPagesForKey(key,a.id)})),
       vestmintSections:data.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
       vestmintHasProForma:data.vestmintHasProForma!==false,
-      vestmintBpGreenway:data.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
-      vestmintBpBrentVillage:data.vestmintBpBrentVillage||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''},
+      vestmintBpGreenway:data.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''},
+      vestmintBpBrentVillage:data.vestmintBpBrentVillage||{enabled:false,rentAtPurchase:'',rentCurrent:'',narrative:''},
       vmReportHTML:null,
       invReportHTML:null,
       // Reset transient UI flags — these are never saved and must not bleed across sessions
@@ -1088,6 +1132,17 @@ async function loadSave(key){
 function deleteSave(key){
   if(!confirm("Delete this saved report? This cannot be undone."))return;
   try{
+    // Remove per-asset VestMint PDF page keys (lw_vmother_<key>_<assetId>) before
+    // deleting the main save row, since the asset list lives inside that row.
+    // We must read the save data first while it's still in cache.
+    try{
+      const saveData = JSON.parse(dbGet(SAVE_PREFIX+key)||"null");
+      if(saveData && Array.isArray(saveData.vestmintOtherAssets)){
+        saveData.vestmintOtherAssets.forEach(a=>{
+          if(a && a.id) dbRemove(VESTMINT_OTHER_PREFIX+key+"_"+a.id);
+        });
+      }
+    }catch(innerErr){ console.warn('[QRB] deleteSave: could not clean up vmother keys:', innerErr); }
     dbRemove(SAVE_PREFIX+key);
     dbRemove(CHARTS_PREFIX+key);
     dbRemove(INV_CHARTS_PREFIX+key);
@@ -1099,7 +1154,7 @@ function deleteSave(key){
     dbSet(SAVES_INDEX_KEY,JSON.stringify(idx));
     if(idx.length===0){state.showHome=false;state.step=0;state.source=null;state.metrics=null;state.invMetrics=null;}
     render();
-  }catch(e){console.warn('deleteSave failed:',e);}
+  }catch(e){console.warn('deleteSave failed:',e);showError("Could not delete the saved report. Please try again.");;}
 }
 // Core file sets per source — these are the files a user typically uploads
 // for a full report. Files not listed here (balanceSheet, capexDetail,
@@ -1291,15 +1346,15 @@ function selectSource(src){
   state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
   state.invNarrativesEdited = false;
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
-  state.businessPlan = {enabled:false,locLimit:'',locDrawn:'',locRemaining:'',unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',narrative:'',launchRentPerUnit:'',bpCapexParsed:null,bpLaunchRentParsed:null,bpLaunchRentOverrides:{}};
+  state.businessPlan = makeFreshBusinessPlan();
   // VestMint Fund mode
   state.vestmintFundOverview = "";
   state.vestmintFinancials = [];
   state.vestmintOtherAssets = [];
   state.vestmintSections = {fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true};
   state.vestmintHasProForma = true;
-  state.vestmintBpGreenway = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''};
-  state.vestmintBpBrentVillage = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',locLimit:'',locDrawn:'',locRemaining:'',narrative:''};
+  state.vestmintBpGreenway = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''};
+  state.vestmintBpBrentVillage = {enabled:false,rentAtPurchase:'',rentCurrent:'',narrative:''};
   state.vmReportHTML = null;
   render();
 }
@@ -1321,7 +1376,7 @@ function renderHome(){
         <span style="font-size:20px">💾</span>
         <div>
           <div style="font-size:13px;font-weight:700;color:#92400e">Back up your reports</div>
-          <div style="font-size:12px;color:#b45309">${_lastBackup?`Last backup: ${_lastBackup}`:'No backup on record'} — download a fresh copy to keep your data safe.</div>
+          <div style="font-size:12px;color:#b45309">${_lastBackup?`Last backup: ${escapeHtml(_lastBackup)}`:'No backup on record'} — download a fresh copy to keep your data safe.</div>
         </div>
       </div>
       <div style="display:flex;gap:8px;flex-shrink:0">
@@ -3342,7 +3397,7 @@ function _buildUnitCurrentRents(){
           if(normU&&rv>0) map[normU]=rv;
         }
       });
-    }catch(_){}
+    }catch(e){ console.warn('[QRB] collectUnitCurrentRents: skipped a rent-roll row due to parse error', e); }
   }
   return map;
 }
@@ -3456,6 +3511,26 @@ function processInvestmentData(opts){
       const rc=parseInt(state.businessPlan.unitsCompleted)||0;
       if(rc>0&&!state.businessPlan.unitsRemaining) state.businessPlan.unitsRemaining=String(Math.max(0,totalUnitsPortfolio-rc));
     }
+    // Auto-populate VestMint Business Plan current rents from the just-processed rent roll.
+    // Matches properties by name (greenway / brent) and computes a weighted avg rent per
+    // occupied unit. Only overwrites rentCurrent — rentAtPurchase stays as a manual,
+    // persistent field (it's a one-time historical snapshot from acquisition).
+    ['vestmintBpGreenway','vestmintBpBrentVillage'].forEach(function(bpKey){
+      const bp=state[bpKey];
+      if(!bp) return;
+      const pattern=bpKey==='vestmintBpGreenway'?/greenway/i:/brent/i;
+      const matching=results.filter(function(p){return pattern.test(p.name||'');});
+      if(!matching.length) return;
+      const totalRent=matching.reduce(function(s,p){return s+(p.monthlyRent||0);},0);
+      const totalOccupied=matching.reduce(function(s,p){
+        const pct=(p.occupancy>0)?p.occupancy:0;
+        return s+(pct>0?((p.unitCount||0)*(pct/100)):0);
+      },0);
+      if(totalOccupied>0&&totalRent>0){
+        state[bpKey].rentCurrent=String(Math.round(totalRent/totalOccupied));
+        state[bpKey]._rentCurrentAutoFilled=true;
+      }
+    });
     // Only regenerate narratives if the user has NOT edited them. The
     // `invNarrativesEdited` flag is set by the textarea oninput handler;
     // for legacy saves that predate the flag we fall back to a content check.
@@ -4118,10 +4193,11 @@ function buildVmBpPage(bp, label, qtr, inv, pg){
   const spent=parseFloat(String(bp.spentToDate||"0").replace(/[$,]/g,""))||0;
   const budgetPct=budget>0?Math.min(100,Math.round(spent/budget*100)):0;
   const remaining=budget>0?budget-spent:0;
-  const locLimit=parseFloat(String(bp.locLimit||"0").replace(/[$,]/g,""))||0;
-  const locDrawn=parseFloat(String(bp.locDrawn||"0").replace(/[$,]/g,""))||0;
-  const locRemaining=parseFloat(String(bp.locRemaining||"0").replace(/[$,]/g,""))||Math.max(0,locLimit-locDrawn)||0;
-  const hasLoc=locLimit>0||locDrawn>0;
+  const rentAtPurchase=parseFloat(String(bp.rentAtPurchase||"0").replace(/[$,]/g,""))||0;
+  const rentCurrent=parseFloat(String(bp.rentCurrent||"0").replace(/[$,]/g,""))||0;
+  const rentDelta=rentCurrent-rentAtPurchase;
+  const rentPct=rentAtPurchase>0?(rentDelta/rentAtPurchase*100):null;
+  const hasRent=rentAtPurchase>0||rentCurrent>0;
   const hasProgress=total>0||comp>0;
   const hasBudget=budget>0||spent>0;
   const hasNarrative=!!(bp.narrative&&bp.narrative.trim());
@@ -4201,22 +4277,28 @@ function buildVmBpPage(bp, label, qtr, inv, pg){
     <div style="height:100%;width:${budgetPct}%;background:var(--teal);border-radius:5px;"></div>
   </div>`:""}
   `:''}
-  ${hasLoc?`
-  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px;font-family:sans-serif;">Line of Credit Status</div>
+  ${hasRent?`
+  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px;font-family:sans-serif;">Avg Rent Per Occupied Unit</div>
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;font-family:sans-serif;">
-    <div style="background:var(--teal-light);border-radius:8px;padding:12px 14px;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">LOC Limit</div>
-      <div style="font-size:18px;font-weight:700;color:var(--dark)">${locLimit>0?'$'+locLimit.toLocaleString():"—"}</div>
+    <div style="background:var(--teal-light);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">At Purchase</div>
+      <div style="font-size:20px;font-weight:700;color:var(--dark)">${rentAtPurchase>0?'$'+rentAtPurchase.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}):"—"}</div>
     </div>
-    <div style="background:var(--dark);border-radius:8px;padding:12px 14px;">
-      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Drawn to Date</div>
-      <div style="font-size:18px;font-weight:700;color:white">${locDrawn>0?'$'+locDrawn.toLocaleString():"—"}</div>
+    <div style="background:var(--dark);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Current</div>
+      <div style="font-size:20px;font-weight:700;color:white">${rentCurrent>0?'$'+rentCurrent.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}):"—"}</div>
     </div>
-    <div style="background:var(--teal-light);border-radius:8px;padding:12px 14px;">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Remaining Available</div>
-      <div style="font-size:18px;font-weight:700;color:var(--dark)">${locRemaining>0?'$'+locRemaining.toLocaleString():"—"}</div>
+    <div style="background:${rentDelta>=0?'#f0fdf4':'#fff1f2'};border:1px solid ${rentDelta>=0?'#bbf7d0':'#fecdd3'};border-radius:8px;padding:14px 16px;">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Increase</div>
+      <div style="font-size:20px;font-weight:700;color:${rentDelta>=0?'#166534':'#991b1b'}">${rentAtPurchase>0&&rentCurrent>0?(rentDelta>=0?'+':'')+('$'+Math.abs(rentDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})):"—"}</div>
+      ${rentPct!==null?`<div style="font-size:11px;color:${rentDelta>=0?'#166534':'#991b1b'};margin-top:2px">${rentPct>=0?'+':''}${rentPct.toFixed(1)}%</div>`:''}
     </div>
-  </div>`:''}
+  </div>
+  ${rentAtPurchase>0&&rentCurrent>0?`<div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;margin-bottom:16px;position:relative;">
+    <div style="height:100%;width:${Math.min(100,rentAtPurchase/rentCurrent*100).toFixed(1)}%;background:#c8e6de;border-radius:4px;"></div>
+    <div style="height:100%;width:100%;background:var(--teal);border-radius:4px;position:absolute;top:0;left:0;opacity:0.6;mix-blend-mode:multiply;"></div>
+  </div><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:-12px;margin-bottom:14px;font-family:sans-serif;"><span>At Purchase: $${rentAtPurchase.toLocaleString()}</span><span>Current: $${rentCurrent.toLocaleString()}</span></div>`:''}
+  `:''}
   ${hasNarrative?`<div class="sh2">Business Plan Narrative</div>
   <div class="ns"><p class="nt">${escapeHtml(bp.narrative).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
@@ -5351,20 +5433,24 @@ function renderVestmintStep2(){
 
     ${(()=>{
       // ── Business Plan sections ──────────────────────────────────────────────
-      function _vmBpSection(bpKey, sectionLabel){
+      // showRemodel: Greenway has remodel progress + budget; Brent Village is rent-growth only.
+      function _vmBpSection(bpKey, sectionLabel, showRemodel){
         const bp=state[bpKey]||{};
-        const set=(field,val)=>`(function(){state['${bpKey}']['${field}']=this.value;})()`; // unused helper kept for clarity
+        const subtitleParts = showRemodel
+          ? 'remodel progress, budget vs. actual, rent growth, and narrative'
+          : 'rent growth and narrative';
         return `<div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
           <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🏗️ Business Plan — ${escapeHtml(sectionLabel)}</div>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:${bp.enabled?'14px':'0'}">
             <input type="checkbox" ${bp.enabled?"checked":""} onchange="state['${bpKey}'].enabled=this.checked;_refreshVestmintReportHTML();render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
             <div>
               <div style="font-size:13px;font-weight:600;color:#1a3a35">Enable Business Plan page for ${escapeHtml(sectionLabel)}</div>
-              <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a page with remodel progress, budget vs. actual, LOC status, and narrative</div>
+              <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a page with ${subtitleParts}</div>
             </div>
           </label>
           ${bp.enabled?`
           <div style="border-top:1px solid #c8e6de;padding-top:14px">
+            ${showRemodel?`
             <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
               <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Completed</label>
@@ -5387,36 +5473,33 @@ function renderVestmintStep2(){
                   oninput="state['${bpKey}'].spentToDate=this.value;_refreshVestmintReportHTML()"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
             </div>
-            <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Line of Credit</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">LOC Limit</label>
-                <input type="text" placeholder="e.g. 2,500,000" value="${escapeHtml(bp.locLimit||'')}"
-                  oninput="state['${bpKey}'].locLimit=this.value;_refreshVestmintReportHTML()"
+            `:''}
+            <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Avg Rent Per Occupied Unit</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">At Purchase</label>
+                <input type="text" placeholder="e.g. 875" value="${escapeHtml(bp.rentAtPurchase||'')}"
+                  oninput="state['${bpKey}'].rentAtPurchase=this.value;_refreshVestmintReportHTML()"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Drawn to Date</label>
-                <input type="text" placeholder="e.g. 1,200,000" value="${escapeHtml(bp.locDrawn||'')}"
-                  oninput="state['${bpKey}'].locDrawn=this.value;_refreshVestmintReportHTML()"
-                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Remaining Available</label>
-                <input type="text" placeholder="auto-calculated" value="${escapeHtml(bp.locRemaining||'')}"
-                  oninput="state['${bpKey}'].locRemaining=this.value;_refreshVestmintReportHTML()"
-                  style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+              <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Current${bp._rentCurrentAutoFilled?` <span style="font-weight:400;color:#5a8070;font-size:10px;font-style:italic">↺ from rent roll</span>`:''}</label>
+                <input type="text" placeholder="e.g. 1,050" value="${escapeHtml(bp.rentCurrent||'')}"
+                  oninput="state['${bpKey}'].rentCurrent=this.value;state['${bpKey}']._rentCurrentAutoFilled=false;_refreshVestmintReportHTML()"
+                  style="width:100%;padding:7px 8px;border:1px solid ${bp._rentCurrentAutoFilled?'#5a8070':'#c8e6de'};border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
             </div>
             <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Narrative <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af">(optional)</span></div>
-            <textarea rows="4" placeholder="Describe remodel progress, key milestones, and outlook for ${escapeHtml(sectionLabel)}…"
+            <textarea rows="4" placeholder="Describe progress, key milestones, and outlook for ${escapeHtml(sectionLabel)}…"
               oninput="state['${bpKey}'].narrative=this.value;_refreshVestmintReportHTML()"
               style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;resize:vertical;box-sizing:border-box">${escapeHtml(bp.narrative||'')}</textarea>
           </div>`:''}
         </div>`;
       }
-      return _vmBpSection('vestmintBpGreenway','Greenway 1 & 2')+_vmBpSection('vestmintBpBrentVillage','Brent Village');
+      return _vmBpSection('vestmintBpGreenway','Greenway 1 & 2',true)+_vmBpSection('vestmintBpBrentVillage','Brent Village',false);
     })()}
 
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
         <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase">📊 Chart Uploads</div>
         <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
-          <input type="checkbox" ${state.vestmintHasProForma!==false?'checked':''} onchange="state.vestmintHasProForma=this.checked" style="accent-color:#1a3a35;width:13px;height:13px"/>
+          <input type="checkbox" ${state.vestmintHasProForma!==false?'checked':''} onchange="state.vestmintHasProForma=this.checked;_refreshVestmintReportHTML()" style="accent-color:#1a3a35;width:13px;height:13px"/>
           Show "vs. Pro Forma" in chart titles
         </label>
       </div>
@@ -5618,7 +5701,10 @@ function _refreshVestmintReportHTML(){
   if(!state.vmReportHTML || !state.invMetrics) return;
   state.vmReportHTML = buildVestmintReport(state.invMetrics, state.invNarratives, state.investmentName, state.currentQuarter, state.vestmintSections);
 }
-// Render each page of a PDF ArrayBuffer to JPEG data URLs via PDF.js
+// Render each page of a PDF ArrayBuffer to JPEG data URLs via PDF.js.
+// Scale 1.5 / quality 0.82 balances readability against blob size:
+// a 20-page statement at 2.0/0.92 was ~280 MB in-memory and 4–8 MB stored;
+// 1.5/0.82 halves both with no visible quality loss at screen/print resolution.
 async function renderPdfToDataURLs(arrayBuffer){
   if(!window.pdfjsLib) throw new Error("PDF.js not loaded");
   pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -5626,11 +5712,19 @@ async function renderPdfToDataURLs(arrayBuffer){
   const pages=[];
   for(let i=1;i<=pdf.numPages;i++){
     const page=await pdf.getPage(i);
-    const vp=page.getViewport({scale:2.0});
+    const vp=page.getViewport({scale:1.5});
     const canvas=document.createElement("canvas");
     canvas.width=vp.width; canvas.height=vp.height;
-    await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
-    pages.push(canvas.toDataURL("image/jpeg",0.92));
+    try{
+      await page.render({canvasContext:canvas.getContext("2d"),viewport:vp}).promise;
+      pages.push(canvas.toDataURL("image/jpeg",0.82));
+    }finally{
+      // Release the PDF.js internal render state and the canvas backing store
+      // immediately after encoding. Without this, a 20-page document at 1.5×
+      // holds ~100 MB of pixel data in memory until GC runs.
+      page.cleanup();
+      canvas.width=0; canvas.height=0;
+    }
   }
   return pages;
 }
@@ -5649,10 +5743,10 @@ function loadChart(key){
         showError("Charts total over 4 MB ("+Math.round(blobSize/1e6*10)/10+" MB). Consider using smaller/lower-resolution images — very large chart blobs can fail to save.");
       }
       saveChartsForKey(currentSaveKey(), state.charts, err=>{
-        // Chart blob is likely too large for the current Supabase plan — log
-        // quietly rather than showing a blocking error. Charts remain visible
-        // for the current session; upgrade to a paid plan for full persistence.
-        console.warn('[QRB] Chart save failed (likely blob too large for free tier):', err&&err.message||err);
+        // Chart is visible this session but won't persist — tell the user so
+        // they know to re-upload next time rather than wondering where it went.
+        console.warn('[QRB] Chart save failed:', err&&err.message||err);
+        showToast("⚠️ Chart uploaded but could not be saved to cloud — re-upload next session if needed.");
       });
       _refreshReportHTML();
       render();
@@ -5958,31 +6052,7 @@ function fuzzyKeyScore(a, b){
   if(ha.indexOf(hb) !== -1) return b.length;
   return 0;
 }
-// Fuzzy-only photo lookup: scans lw_photo_* keys without retrying the exact match.
-// Used by onPropertyNameBlur when the exact lookup was already attempted during typing.
-function _fuzzyPhotoScan(name){
-  if(!name) return null;
-  try{
-    const targetKey=photoStorageKey(name);
-    const norm=targetKey.slice("lw_photo_".length);
-    if(!norm) return null;
-    let best=null, bestScore=0;
-    for(const k of dbKeys()){
-      if(!k.startsWith("lw_photo_")) continue;
-      const stored=k.slice("lw_photo_".length);
-      const score=fuzzyKeyScore(norm, stored);
-      if(score>=5&&score>bestScore){best=k;bestScore=score;}
-    }
-    if(best) return dbGet(best);
-    const aliases=getPropertyAliases(name);
-    for(const alias of aliases){
-      if(alias===name) continue;
-      const aliasVal=dbGet(photoStorageKey(alias));
-      if(aliasVal) return aliasVal;
-    }
-    return null;
-  } catch(e){ return null; }
-}
+
 function _isValidPhotoDataURI(val){
   // Must be a non-empty string starting with a recognized image data URI prefix
   return typeof val==='string' && /^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml);base64,/.test(val);
@@ -6887,15 +6957,6 @@ const PROP_TAX_PATTERNS = [
   /prop\.?\s+tax/i,
   /county\s+tax/i,
 ];
-function hasPropTaxLine(incomeRows){
-  if(!incomeRows || !incomeRows.length) return false;
-  // Require both a matching label AND a non-zero quarterly amount so a row that
-  // exists but has blank/zero values for the current quarter still triggers a warning.
-  return incomeRows.some(row =>
-    PROP_TAX_PATTERNS.some(p => p.test(row.label||"")) &&
-    row.amount != null && row.amount !== 0
-  );
-}
 // Returns "ok" | "zero" | "missing" so callers can tailor the warning message.
 function propTaxStatus(incomeRows){
   if(!incomeRows || !incomeRows.length) return "missing";
@@ -7268,8 +7329,8 @@ function render(){
     const sourceBadge=`<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${state.source==='appfolio'?'#e0f2fe':'#dcfce7'};color:${state.source==='appfolio'?'#0369a1':'#15803d'};margin-left:8px;vertical-align:middle">${state.source==='appfolio'?'AppFolio':'Buildium'}</span>`;
     const photoBox = state.propertyPhoto
       ? (state.photoAutoLoaded
-          ? `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #f59e0b"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px;color:#92400e">⚠️ Photo auto-loaded from saved data</div><div style="font-size:12px;color:#78350f;margin-bottom:10px">Please verify this is the correct photo for <strong>${state.propertyName||"this property"}</strong>. If not, remove it and upload the right one.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`
-          : `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:1px solid #c8e6de"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px">✅ Property photo saved</div><div style="font-size:12px;color:#5a8070;margin-bottom:10px">Will auto-load next quarter for <strong>${state.propertyName||"this property"}</strong>.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`)
+          ? `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #f59e0b"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px;color:#92400e">⚠️ Photo auto-loaded from saved data</div><div style="font-size:12px;color:#78350f;margin-bottom:10px">Please verify this is the correct photo for <strong>${escapeHtml(state.propertyName||"this property")}</strong>. If not, remove it and upload the right one.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`
+          : `<div style="display:flex;align-items:center;gap:16px"><img src="${state.propertyPhoto}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;border:1px solid #c8e6de"/><div><div style="font-weight:600;font-size:13px;margin-bottom:4px">✅ Property photo saved</div><div style="font-size:12px;color:#5a8070;margin-bottom:10px">Will auto-load next quarter for <strong>${escapeHtml(state.propertyName||"this property")}</strong>.</div><button class="upload-btn" style="margin-right:8px" onclick="loadPhoto()">Replace</button><button style="background:white;color:#c0392b;border:1px solid #c0392b;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600" onclick="clearPhoto()">Remove</button></div></div>`)
       : `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font-weight:600;font-size:13px;margin-bottom:4px">No photo uploaded</div><div style="font-size:12px;color:#5a8070">Upload once — saved automatically for future quarters.</div></div><button class="upload-btn" onclick="loadPhoto()">Upload Photo</button></div>`;
     const commonTop = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #c8e6de">
