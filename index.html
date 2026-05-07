@@ -4483,6 +4483,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const stripGlobalRules=(css)=>css
     .replace(/\bhtml\s*\{[^}]*\}/g,'')
     .replace(/\bbody\s*\{[^}]*\}/g,'')
+    .replace(/:root\s*\{[^}]*\}/g,'')
     .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
     .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
   const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
@@ -4522,7 +4523,7 @@ ${sec.fundOverview&&state.vestmintFundOverview?`<div class="page">
   <div style="font-family:sans-serif;font-size:13px;line-height:1.75;">${fmtOverview(foPart2)}</div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:""}`:""}
-<!-- PAGE 3: SUMMARY — QoQ + narratives -->
+<!-- PAGE 3+: SUMMARY — QoQ + narratives (may span 2 pages if overflow) -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr}</div>
   ${scopeNote}
@@ -4540,7 +4541,7 @@ ${summaryOverflow&&(n.capex||n.outlook)?`<div class="page">
   ${n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,"<br>")}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:""}
-<!-- PAGE 3: PORTFOLIO SNAPSHOT -->
+<!-- PAGE 4+: PORTFOLIO SNAPSHOT -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Portfolio Snapshot — ${qtr}</div>
   ${scopeNote}
@@ -5733,6 +5734,7 @@ function loadVestmintOtherAssetHTML(assetId){
       if(!asset){showError("Asset not found.");return;}
       asset.html=html;
       saveVestmintOtherAssetHtmlForKey(currentSaveKey(),assetId,html);
+      _refreshVestmintReportHTML();
       render();
     };
     reader.readAsText(f);
@@ -6395,6 +6397,10 @@ function cleanupGarbageDbKeys(){
   try{
     for(const k of dbKeys()){
       if(!k.startsWith('lw_photo_')&&!k.startsWith('lw_assetfacts_')) continue;
+      // Never purge VestMint fund-entity photo keys — their normalized suffixes
+      // ("vm_lls"=5, "vm_rff"=5) are short by design and would be incorrectly
+      // flagged as garbage fragments by the alphaLen≤5 threshold below.
+      if(k.startsWith('lw_photo_vm_')) continue;
       const prefix=k.startsWith('lw_photo_')?'lw_photo_':'lw_assetfacts_';
       const suffix=k.slice(prefix.length);
       const alphaLen=suffix.replace(/_/g,'').length;
