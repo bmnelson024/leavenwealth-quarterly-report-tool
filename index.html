@@ -4331,14 +4331,13 @@ function buildVmBpPage(bp, label, qtr, inv, pg){
 // ─── VESTMINT FUND REPORT BUILDER ────────────────────────────────────────────
 function buildVestmintReport(m,n,invName,quarter,sections){
   const sec={fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true,...(sections||{})};
-  const _pf=state.vestmintHasProForma!==false;
   const inv=escapeHtml(invName||"VestMint Fund");
   const qtr=escapeHtml(quarter||"");
   const prev=state.invPrevMetrics;
   const pg={n:1,v(){return ++this.n;}};
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(1)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
-  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}${_pf?' · vs. Pro Forma':''}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}${_pf?' · vs. Pro Forma':''}</div><div class="np">Chart not uploaded</div></div>`;};
+  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
   // Property photos for cover
   const propPhotos=state.invProperties.filter(p=>p.name).map(p=>({name:p.name,photo:loadPhotoForProperty(p.name)})).filter(p=>p.photo);
   const n_photos=propPhotos.length;
@@ -5589,10 +5588,6 @@ function renderVestmintStep2(){
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
         <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase">📊 Chart Uploads</div>
-        <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
-          <input type="checkbox" ${state.vestmintHasProForma!==false?'checked':''} onchange="state.vestmintHasProForma=this.checked;_refreshVestmintReportHTML();render()" style="accent-color:#1a3a35;width:13px;height:13px"/>
-          Show "vs. Pro Forma" in chart titles
-        </label>
       </div>
       <div class="charts-info" style="margin-bottom:10px">📊 <strong>${chartsN}/12 charts uploaded</strong> — ${chartsN===12?"All charts ready!":"Missing charts will show placeholders in the report."}</div>
       <p style="font-size:12px;color:#5a8070;margin:0 0 10px">Same charts as an Investment Report — 12 slots across financial trends and leasing.</p>
