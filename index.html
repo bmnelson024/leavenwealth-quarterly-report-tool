@@ -1120,6 +1120,17 @@ async function loadSave(key){
     if(state.invMetrics && !state.invMetrics.expenseCategories) state.invMetrics.expenseCategories=[];
     if(state.invMetrics && !state.invMetrics.unitCurrentRents) state.invMetrics.unitCurrentRents={};
     if(state.invMetrics && !Array.isArray(state.invMetrics.propertyMetrics)) state.invMetrics.propertyMetrics=[];
+    // Backfill property names into invMetrics.propertyMetrics from invProperties in case
+    // the save was made before the name was propagated into the metrics object.
+    // After JSON round-trip invMetrics.propertyMetrics[i] and invProperties[i].metrics
+    // are separate copies, so we must sync explicitly. We match by position within the
+    // subset of properties that were actually processed (metrics != null).
+    if(state.invMetrics && state.invMetrics.propertyMetrics.length && state.invProperties && state.invProperties.length){
+      const processed=state.invProperties.filter(function(p){return p.metrics!=null;});
+      state.invMetrics.propertyMetrics.forEach(function(pm,i){
+        if(!pm.name && processed[i] && processed[i].name) pm.name=processed[i].name;
+      });
+    }
     // Restore investment property files (saved separately, like charts)
     applyInvFiles(state.invProperties, loadInvFilesForKey(key));
     // Rebuild row arrays from restored files. Saved metrics omit rentRollRows /
@@ -3687,7 +3698,7 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   const prev=state.invPrevMetrics;
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(2)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
-  const C=(k,t)=>{const s=state.invCharts[k];return`<div class="cb"><div class="ct">${t}</div>${s?`<img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/>`:`<div class="np">Chart not uploaded</div>`}</div>`;};
+  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
   const _propNamesArr=[...state.invProperties.map(p=>p.name).filter(Boolean),
     ...(/mwp\s*5/i.test(invName||'')?['2520 M Street','Private Money Investment']:[])
   ];
@@ -4315,7 +4326,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const pg={n:1,v(){return ++this.n;}};
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(1)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
-  const C=(k,t)=>{const s=state.invCharts[k];return`<div class="cb"><div class="ct">${t}${_pf?' · vs. Pro Forma':''}</div>${s?`<img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/>`:`<div class="np">Chart not uploaded</div>`}</div>`;};
+  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}${_pf?' · vs. Pro Forma':''}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}${_pf?' · vs. Pro Forma':''}</div><div class="np">Chart not uploaded</div></div>`;};
   // Property photos for cover
   const propPhotos=state.invProperties.filter(p=>p.name).map(p=>({name:p.name,photo:loadPhotoForProperty(p.name)})).filter(p=>p.photo);
   const n_photos=propPhotos.length;
@@ -4520,7 +4531,7 @@ ${sec.leasingSection?`
     <div class="lc"><div class="ll">Lease Renewals</div><div class="lv">${m.renewals}</div></div>
     <div class="lc"><div class="ll">Prospect Inquiries</div><div class="lv">${m.inquiries}</div></div>
     <div class="lc"><div class="ll">Prospect Applications</div><div class="lv">${m.applications}</div></div>
-    <div class="lc"><div class="ll">—</div><div class="lv">&nbsp;</div></div>
+    <div class="lc"><div class="ll">Total Units</div><div class="lv">${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</div></div>
   </div>
   <div class="cg">
     ${C("inv_occupancy_rate","Occupancy Rate")}
@@ -4554,7 +4565,7 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   }
   return aPages.map((src,pi)=>`<div class="page" style="padding:0;overflow:hidden">
   <img src="${src}" style="width:100%;height:100%;object-fit:contain;display:block"/>
-  <div class="pgn" style="position:absolute;bottom:18px;left:50%;transform:translateX(-50%)">${pg.v()}</div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`).join("\n");
 }).join("\n"):""}
 <!-- LAST PAGE: FOOTNOTES -->
@@ -4650,7 +4661,7 @@ function renderInvestmentStep0(){
       ${!prop._imported&&prop.expanded?`
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Property Name</label>
-          <input type="text" placeholder="e.g. Park Place" value="${escapeHtml(prop.name||"")}" oninput="(function(v){var p=state.invProperties.find(function(x){return x.id===${prop.id};});if(p)p.name=v;})(this.value)" style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
+          <input type="text" placeholder="e.g. Park Place" value="${escapeHtml(prop.name||"")}" oninput="(function(v){var p=state.invProperties.find(function(x){return x.id===${prop.id};});if(p){p.name=v;if(p.metrics)p.metrics.name=v;}})(this.value)" style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
         <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Data Source</label>
           <div style="display:flex;gap:8px">
             <button onclick="(function(){var p=state.invProperties.find(function(x){return x.id===${prop.id};});if(p){p.source='buildium';render();}})()" style="flex:1;padding:7px;border:2px solid ${prop.source==='buildium'?"#1a3a35":"#c8e6de"};border-radius:6px;background:${prop.source==='buildium'?"#1a3a35":"white"};color:${prop.source==='buildium'?"white":"#1a3a35"};font-size:12px;font-weight:600;cursor:pointer">Buildium</button>
