@@ -420,7 +420,11 @@ async function supaFetchLargeKeysForSave(saveKey){
   if(!saveKey||!sb||!_currentUser) return;
   const keysToFetch = [
     CHARTS_PREFIX+saveKey, INV_CHARTS_PREFIX+saveKey, BG_CHAMPION_CHARTS_PREFIX+saveKey,
-    FILES_PREFIX+saveKey, INV_FILES_PREFIX+saveKey, VESTMINT_FINANCIALS_PREFIX+saveKey
+    FILES_PREFIX+saveKey, INV_FILES_PREFIX+saveKey, VESTMINT_FINANCIALS_PREFIX+saveKey,
+    // VestMint cover photos are global (not save-key-scoped) but must be in cache
+    // before the report renders. Fetching them here guarantees they arrive even if
+    // supaBootstrap hasn't finished yet when the user opens the save.
+    photoStorageKey(VM_LLS_PHOTO_KEY), photoStorageKey(VM_RFF_PHOTO_KEY)
   ];
   // Only fetch keys not already in cache
   const missing = keysToFetch.filter(k=>!Object.prototype.hasOwnProperty.call(_dbCache,k));
@@ -4392,7 +4396,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 .pgn{position:absolute;bottom:24px;right:52px;font-family:sans-serif;font-size:10px;color:var(--muted);}
 .footer-logo{position:absolute;bottom:12px;right:100px;height:48px;width:auto;opacity:0.75;}
 .footer-prop{position:absolute;bottom:28px;left:52px;font-family:sans-serif;font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;}
-.fs-img{width:100%;height:auto;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:12px;}
+.fs-img{width:100%;max-height:820px;object-fit:contain;object-position:top left;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:12px;}
 @media print{@page{margin:0;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{background:white;}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page;}.page:last-child{page-break-after:auto;}img{box-shadow:none;}}`;
 
   // Fund overview text → convert line-breaks + bullet chars to HTML
@@ -4415,7 +4419,21 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 
   // Summary overflow check
   const summaryTextLen=(n.income||"").length+(n.expenses||"").length+(n.capex||"").length+(n.outlook||"").length;
-  const summaryOverflow=summaryTextLen>1200||(n.outlook||"").length>500;
+  const summaryOverflow=summaryTextLen>700||(n.outlook||"").length>300;
+
+  // Fund Overview split logic — split long overviews across two pages
+  const foRaw=state.vestmintFundOverview||"";
+  const foOverflow=foRaw.length>1800;
+  let foPart1=foRaw, foPart2="";
+  if(foOverflow){
+    // Find a clean split point (paragraph break) nearest the halfway mark
+    const splitTarget=Math.floor(foRaw.length/2);
+    const searchFrom=Math.max(0,splitTarget-300);
+    const nlIdx=foRaw.lastIndexOf('\n',splitTarget+300);
+    const splitPos=(nlIdx>searchFrom)?nlIdx:splitTarget;
+    foPart1=foRaw.slice(0,splitPos).trimEnd();
+    foPart2=foRaw.slice(splitPos).trimStart();
+  }
 
   // Financial statement images
   const finPages=(state.vestmintFinancials||[]);
@@ -4442,9 +4460,14 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 <!-- PAGE 2: FUND OVERVIEW (own page, only if enabled and content exists) -->
 ${sec.fundOverview&&state.vestmintFundOverview?`<div class="page">
   <div class="pn">${inv}</div><div class="sh">Fund Overview</div>
-  <div style="font-family:sans-serif;font-size:13px;line-height:1.75;">${fmtOverview(state.vestmintFundOverview)}</div>
+  <div style="font-family:sans-serif;font-size:13px;line-height:1.75;">${fmtOverview(foPart1)}</div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
-</div>`:""}
+</div>${foOverflow&&foPart2?`
+<div class="page">
+  <div class="pn">${inv}</div><div class="sh">Fund Overview <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
+  <div style="font-family:sans-serif;font-size:13px;line-height:1.75;">${fmtOverview(foPart2)}</div>
+  <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
+</div>`:""}`:""}
 <!-- PAGE 3: SUMMARY — QoQ + narratives -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr}</div>
