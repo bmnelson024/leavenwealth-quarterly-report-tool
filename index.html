@@ -4484,7 +4484,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
     .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
   const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
-  const otherAssetOverrides=`.rf-report{padding:48px 52px 64px!important;max-width:100%!important;margin:0!important;}
+  const otherAssetOverrides=`.rf-report{padding:48px 52px 80px!important;max-width:100%!important;margin:0!important;}
 .rf-title h1{font-size:28px!important;} .rf-title .subtitle,.rf-title .confidential{font-size:12px!important;}
 .rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.75!important;}
 .rf-note,.rf-disclaimer{font-size:11px!important;line-height:1.6!important;}
@@ -4626,7 +4626,7 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
   // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
   const CHARS_PER_PAGE=3500;
-  const wrapPage=(content)=>`<div class="page" style="padding:0;border-left:none;position:relative;padding-bottom:60px;">${content}<div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${content}<div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
   const parts=body.split(headingRe);
   if(parts.length<=1){return wrapPage(body);}
