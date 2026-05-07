@@ -4639,12 +4639,18 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const parts=innerContent.split(headingRe);
   // Helper: chunk an array of string segments into CHARS_PER_PAGE-sized groups
   const chunkSegments=(segs)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>CHARS_PER_PAGE){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
+  // Helper: if a single chunk is still too long, split it further at </li> / </p> boundaries
+  const splitLong=(chunk)=>{
+    if(chunk.length<=CHARS_PER_PAGE)return[chunk];
+    const segs=chunk.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
+    return segs.length>1?chunkSegments(segs):[chunk];
+  };
   let pageChunks;
   if(parts.length>1){
-    // Section-heading splits available — use them
-    pageChunks=chunkSegments(parts);
+    // Section-heading splits available — use them, then further split any oversized chunk
+    pageChunks=chunkSegments(parts).flatMap(splitLong);
   } else if(innerContent.length>CHARS_PER_PAGE){
-    // No section headings but content is long — split at </p> boundaries to prevent
+    // No section headings but content is long — split at </li>/</p> boundaries to prevent
     // the single .page div from overflowing the 1056px print page height.
     const pSegs=innerContent.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
     pageChunks=pSegs.length>1?chunkSegments(pSegs):[innerContent];
