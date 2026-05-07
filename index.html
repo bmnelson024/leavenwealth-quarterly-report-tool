@@ -4478,23 +4478,14 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const otherAssets=(state.vestmintOtherAssets||[]).filter(a=>a.name||a.html);
   // Collect any <style> blocks from other-asset HTML files so they render correctly in the report,
   // then append overrides that normalize sizing to match the report's typography.
-  // Extract and fully scope styles from other-asset HTML files.
-  // Simply stripping body/html/* is not enough — any bare element selector (e.g. img{}, h1{}, p{})
-  // would still bleed into the rest of the report. Instead we scope EVERY rule to .rf-report so
-  // injected CSS is completely isolated and cannot affect financial-statement images or other pages.
-  const scopeRFStyles=(css)=>{
-    // Drop @-rules entirely (RF-specific @media / @keyframes should not apply globally)
-    css=css.replace(/@[a-z][^{]*\{(?:[^{}]|\{[^}]*\})*\}/gi,'');
-    // Drop any remaining html/body/* global selectors
-    css=css.replace(/\bhtml\s*\{[^}]*\}/g,'').replace(/\bbody\s*\{[^}]*\}/g,'').replace(/\*[^{]*\{[^}]*\}/g,'');
-    // Scope every remaining rule to .rf-report
-    return css.replace(/([^{}\n@][^{}\n]*)\s*\{([^{}]*)\}/g,(m,sel,rules)=>{
-      const s=sel.trim();if(!s)return'';
-      const scoped=s.split(',').map(p=>`.rf-report ${p.trim()}`).join(',');
-      return `${scoped}{${rules}}`;
-    });
-  };
-  const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?scopeRFStyles(sm[1]):'';}).join('\n');
+  // Extract styles from other-asset HTML files, stripping document-level selectors (body, *, ::before/after)
+  // that would pollute the entire report if injected into the shared <head>.
+  const stripGlobalRules=(css)=>css
+    .replace(/\bhtml\s*\{[^}]*\}/g,'')
+    .replace(/\bbody\s*\{[^}]*\}/g,'')
+    .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
+    .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
+  const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
   const otherAssetOverrides=`.rf-report{padding:16px 52px 80px!important;max-width:100%!important;margin:0!important;}
 .rf-title h1{font-size:28px!important;} .rf-title .subtitle,.rf-title .confidential{font-size:12px!important;}
 .rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.75!important;}
