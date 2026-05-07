@@ -4407,7 +4407,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 .pgn{position:absolute;bottom:24px;right:52px;font-family:sans-serif;font-size:10px;color:var(--muted);}
 .footer-logo{position:absolute;bottom:12px;right:100px;height:48px;width:auto;opacity:0.75;}
 .footer-prop{position:absolute;bottom:28px;left:52px;font-family:sans-serif;font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;}
-.fs-img{width:100%;max-height:880px;object-fit:contain;object-position:top left;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:12px;}
+.fs-img{width:100%;max-height:880px;object-fit:contain;object-position:top left;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:0;}
 @media print{@page{margin:0;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{background:white;}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page;}.page:last-child{page-break-after:auto;}img{box-shadow:none;}}`;
 
   // Fund overview text → convert line-breaks + bullet chars to HTML
@@ -4646,7 +4646,7 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   } else if(innerContent.length>CHARS_PER_PAGE){
     // No section headings but content is long — split at </p> boundaries to prevent
     // the single .page div from overflowing the 1056px print page height.
-    const pSegs=innerContent.split(/(?<=<\/p>)/i);
+    const pSegs=innerContent.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
     pageChunks=pSegs.length>1?chunkSegments(pSegs):[innerContent];
   } else {
     pageChunks=[innerContent];
