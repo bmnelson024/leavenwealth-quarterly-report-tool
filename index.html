@@ -5590,7 +5590,7 @@ function renderVestmintStep2(){
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:4px">
         <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase">📊 Chart Uploads</div>
         <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:400;color:#5a8070;cursor:pointer">
-          <input type="checkbox" ${state.vestmintHasProForma!==false?'checked':''} onchange="state.vestmintHasProForma=this.checked;_refreshVestmintReportHTML()" style="accent-color:#1a3a35;width:13px;height:13px"/>
+          <input type="checkbox" ${state.vestmintHasProForma!==false?'checked':''} onchange="state.vestmintHasProForma=this.checked;_refreshVestmintReportHTML();render()" style="accent-color:#1a3a35;width:13px;height:13px"/>
           Show "vs. Pro Forma" in chart titles
         </label>
       </div>
