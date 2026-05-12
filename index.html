@@ -1410,6 +1410,155 @@ function selectSource(src){
   render();
 }
 let _homeShowAll = false; // toggled by "Show more / Show less" on home screen
+let _homeTab = 'reports';    // 'reports' | 'portfolio'
+let _portfolioQuarter = '';  // selected quarter in Portfolio Summary tab
+// ─── PORTFOLIO SUMMARY ───────────────────────────────────────────────────────
+function exportPortfolioToExcel(quarter){
+  const saves=getSinglePropertySaves().filter(s=>s.quarter===quarter);
+  if(!saves.length) return;
+  const headers=['Property','Units','Income','Expenses','NOI','Occupancy %','Delinquency','New Leases','Renewals'];
+  const dataRows=saves.map(s=>{
+    const m=s.metrics;
+    return[s.propertyName,m.unitCount||0,m.totalIncome||0,m.totalExpense||0,m.noi||0,m.occupancy||0,m.delinquency||0,m.newLeases||0,m.renewals||0];
+  });
+  const n=dataRows.length;
+  const sum=i=>dataRows.reduce((a,r)=>a+(r[i]||0),0);
+  const totals=['TOTAL',sum(1),sum(2),sum(3),sum(4),n?Math.round(sum(5)/n):0,sum(6),sum(7),sum(8)];
+  const ws=XLSX.utils.aoa_to_sheet([headers,...dataRows,totals]);
+  // Dollar-format columns C-G and H (Income, Expenses, NOI, Occupancy%, Delinquency)
+  const dollarFmt='"$"#,##0.00';
+  const pctFmt='0"%"';
+  const range=XLSX.utils.decode_range(ws['!ref']);
+  for(let R=1;R<=range.e.r;R++){
+    [2,3,4,6].forEach(C=>{const cell=ws[XLSX.utils.encode_cell({r:R,c:C})];if(cell)cell.z=dollarFmt;});
+    const pctCell=ws[XLSX.utils.encode_cell({r:R,c:5})];if(pctCell)pctCell.z=pctFmt;
+  }
+  ws['!cols']=[{wch:28},{wch:7},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:12},{wch:11}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,quarter.replace(/[\\\/\?\*\[\]]/g,''));
+  const buf=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  const blob=new Blob([buf],{type:'application/octet-stream'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='Portfolio Summary '+quarter+'.xlsx';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+function renderPortfolioSummary(){
+  const allSaves=getSinglePropertySaves();
+  if(!allSaves.length){
+    return`<div style="background:white;border:1px solid #c8e6de;border-radius:12px;padding:32px;text-align:center;color:#9ca3af;font-size:14px">
+      No single-property reports saved yet. Complete a report (through at least the Metrics step) and it will appear here.
+    </div>`;
+  }
+  // Collect unique quarters, sorted newest-first using Q/Year ordering
+  const quarters=[...new Set(allSaves.map(s=>s.quarter))].sort((a,b)=>{
+    const pa=a.match(/Q([1-4])\s*(\d{4})/i), pb=b.match(/Q([1-4])\s*(\d{4})/i);
+    if(!pa||!pb) return 0;
+    const ya=parseInt(pa[2]),yb=parseInt(pb[2]),qa=parseInt(pa[1]),qb=parseInt(pb[1]);
+    return ya!==yb?yb-ya:qb-qa;
+  });
+  // Auto-select the most recent quarter if none selected yet or selection gone stale
+  if(!_portfolioQuarter||!quarters.includes(_portfolioQuarter)) _portfolioQuarter=quarters[0];
+  const q=_portfolioQuarter;
+  const qSaves=allSaves.filter(s=>s.quarter===q);
+  // Aggregate
+  const n=qSaves.length;
+  const sum=fn=>qSaves.reduce((a,s)=>a+(fn(s.metrics)||0),0);
+  const totIncome=sum(m=>m.totalIncome);
+  const totExpense=sum(m=>m.totalExpense);
+  const totNoi=sum(m=>m.noi);
+  const totUnits=sum(m=>m.unitCount);
+  const avgOcc=n?Math.round(sum(m=>m.occupancy)/n):0;
+  const totDelinq=sum(m=>m.delinquency);
+  const totLeases=sum(m=>m.newLeases);
+  const totRenewals=sum(m=>m.renewals);
+  const fmtN=v=>v==null?"—":fmtWhole(v);
+  const cardStyle='background:white;border:1px solid #c8e6de;border-radius:10px;padding:14px 18px;flex:1;min-width:130px';
+  const labelStyle='font-size:11px;font-weight:700;color:#5a8070;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px';
+  const valStyle='font-size:20px;font-weight:700;color:#1a3a35';
+  const subStyle='font-size:11px;color:#9ca3af;margin-top:2px';
+  // Property table rows
+  const maxNoi=Math.max(...qSaves.map(s=>Math.abs(s.metrics.noi||0)),1);
+  const tableRows=qSaves.map(s=>{
+    const m=s.metrics;
+    const noi=m.noi||0;
+    const barW=Math.round(Math.abs(noi)/maxNoi*80);
+    const barColor=noi>=0?'#16a34a':'#dc2626';
+    return`<tr style="border-bottom:1px solid #f0f4f2">
+      <td style="padding:10px 12px;font-weight:600;color:#1a3a35;font-size:13px">${escapeHtml(s.propertyName)}</td>
+      <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${m.unitCount||'—'}</td>
+      <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${fmtN(m.totalIncome)}</td>
+      <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${fmtN(m.totalExpense)}</td>
+      <td style="padding:10px 8px;text-align:right;font-size:13px">
+        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
+          <div style="background:${barColor};border-radius:3px;height:8px;width:${barW}px;opacity:.7"></div>
+          <span style="color:${barColor};font-weight:700">${fmtN(noi)}</span>
+        </div>
+      </td>
+      <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${m.occupancy!=null?m.occupancy+'%':'—'}</td>
+      <td style="padding:10px 8px;text-align:right;color:${(m.delinquency||0)>0?'#dc2626':'#374151'};font-size:13px">${fmtN(m.delinquency)}</td>
+      <td style="padding:10px 8px;text-align:center;color:#374151;font-size:13px">${m.newLeases!=null?m.newLeases:'—'}</td>
+      <td style="padding:10px 8px;text-align:center;color:#374151;font-size:13px">${m.renewals!=null?m.renewals:'—'}</td>
+    </tr>`;
+  }).join('');
+  const thStyle='padding:8px 8px;font-size:11px;font-weight:700;color:#5a8070;text-transform:uppercase;letter-spacing:.4px;text-align:right;border-bottom:2px solid #c8e6de;white-space:nowrap';
+  const thStyleL='padding:8px 12px;font-size:11px;font-weight:700;color:#5a8070;text-transform:uppercase;letter-spacing:.4px;text-align:left;border-bottom:2px solid #c8e6de';
+  const thStyleC='padding:8px 8px;font-size:11px;font-weight:700;color:#5a8070;text-transform:uppercase;letter-spacing:.4px;text-align:center;border-bottom:2px solid #c8e6de;white-space:nowrap';
+  return`
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="font-size:13px;font-weight:600;color:#1a3a35">Quarter:</label>
+        <select onchange="_portfolioQuarter=this.value;renderHome()"
+          style="font-size:13px;padding:6px 12px;border:1.5px solid #c8e6de;border-radius:7px;color:#1a3a35;font-family:Inter,sans-serif;background:white;cursor:pointer">
+          ${quarters.map(qt=>`<option value="${escapeHtml(qt)}"${qt===q?' selected':''}>${escapeHtml(qt)}</option>`).join('')}
+        </select>
+        <span style="font-size:12px;color:#9ca3af">${n} propert${n===1?'y':'ies'}</span>
+      </div>
+      <button onclick="exportPortfolioToExcel('${escapeHtml(q)}')"
+        style="background:#1a3a35;color:white;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">
+        ⬇ Export to Excel
+      </button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">
+      <div style="${cardStyle}"><div style="${labelStyle}">Total Income</div><div style="${valStyle}">${fmtN(totIncome)}</div><div style="${subStyle}">${totUnits} units</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Total Expenses</div><div style="${valStyle}">${fmtN(totExpense)}</div><div style="${subStyle}">operating</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Total NOI</div><div style="font-size:20px;font-weight:700;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</div><div style="${subStyle}">${totIncome?Math.round(totNoi/totIncome*100):0}% margin</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Avg Occupancy</div><div style="${valStyle}">${avgOcc}%</div><div style="${subStyle}">${n} properties</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Total Delinquency</div><div style="font-size:20px;font-weight:700;color:${totDelinq>0?'#dc2626':'#16a34a'}">${fmtN(totDelinq)}</div><div style="${subStyle}">balance due</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Leasing</div><div style="${valStyle}">${totLeases} new · ${totRenewals} renewals</div><div style="${subStyle}">this quarter</div></div>
+    </div>
+    <div style="overflow-x:auto;border-radius:10px;border:1px solid #c8e6de">
+      <table style="width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden">
+        <thead style="background:#f0f9f7">
+          <tr>
+            <th style="${thStyleL}">Property</th>
+            <th style="${thStyle}">Units</th>
+            <th style="${thStyle}">Income</th>
+            <th style="${thStyle}">Expenses</th>
+            <th style="${thStyle}">NOI</th>
+            <th style="${thStyle}">Occ %</th>
+            <th style="${thStyle}">Delinquency</th>
+            <th style="${thStyleC}">New Leases</th>
+            <th style="${thStyleC}">Renewals</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows}
+          <tr style="background:#f0f9f7;font-weight:700;border-top:2px solid #c8e6de">
+            <td style="padding:10px 12px;font-size:13px;color:#1a3a35">Portfolio Total</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${totUnits}</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${fmtN(totIncome)}</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${fmtN(totExpense)}</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${avgOcc}%</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:${totDelinq>0?'#dc2626':'#16a34a'}">${fmtN(totDelinq)}</td>
+            <td style="padding:10px 8px;text-align:center;font-size:13px;color:#1a3a35">${totLeases}</td>
+            <td style="padding:10px 8px;text-align:center;font-size:13px;color:#1a3a35">${totRenewals}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
 function renderHome(){
   document.getElementById("home-link").innerHTML="";
   document.getElementById("steps-indicator").innerHTML="";
@@ -1421,6 +1570,9 @@ function renderHome(){
   const _today=new Date().toISOString().slice(0,10);
   const _lastBackup=localStorage.getItem('lw_last_backup_date');
   const _needsBackup=saves.length>0&&(!_lastBackup||_lastBackup<_today);
+  // Tab strip
+  const tabBtn=(tab,label)=>`<button onclick="_homeTab='${tab}';renderHome()"
+    style="padding:8px 18px;border-radius:8px 8px 0 0;border:1.5px solid ${_homeTab===tab?'#c8e6de':'transparent'};border-bottom:${_homeTab===tab?'1.5px solid white':'1.5px solid #c8e6de'};background:${_homeTab===tab?'white':'transparent'};color:${_homeTab===tab?'#1a3a35':'#5a8070'};font-size:13px;font-weight:${_homeTab===tab?'700':'500'};cursor:pointer;font-family:Inter,sans-serif;margin-bottom:-1px;position:relative;z-index:1">${label}</button>`;
   document.getElementById("step-content").innerHTML=`
     ${_needsBackup?`<div id="backup-reminder-banner" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div style="display:flex;align-items:center;gap:10px">
@@ -1435,12 +1587,12 @@ function renderHome(){
         <button onclick="localStorage.setItem('lw_last_backup_date','${attrJs(_today)}');document.getElementById('backup-reminder-banner').style.display='none'" style="background:white;color:#92400e;border:1px solid #fcd34d;border-radius:7px;padding:8px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">Remind me later</button>
       </div>
     </div>`:''}
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px">
-      <div>
-        <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Saved Reports</h2>
-        <p style="font-size:13px;color:#5a8070">Resume where you left off, or start a fresh report.</p>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:0;flex-wrap:wrap">
+      <div style="display:flex;align-items:flex-end;gap:2px;border-bottom:1.5px solid #c8e6de;padding-bottom:0">
+        ${tabBtn('reports','📋 Saved Reports')}
+        ${tabBtn('portfolio','📊 Portfolio Summary')}
       </div>
-      <div style="display:flex;gap:8px;flex-shrink:0">
+      <div style="display:flex;gap:8px;flex-shrink:0;padding-bottom:1px">
         <button id="sync-btn" onclick="(async()=>{const b=document.getElementById('sync-btn');b.disabled=true;b.textContent='Syncing…';try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){b.disabled=false;b.textContent='↻ Sync';}})();"
           style="background:white;color:#2e7d6e;border:1.5px solid #c8e6de;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap"
           title="Re-sync reports from the cloud">↻ Sync</button>
@@ -1450,7 +1602,8 @@ function renderHome(){
         </button>
       </div>
     </div>
-    ${(()=>{
+    <div style="padding-top:20px">
+    ${_homeTab==='portfolio'?renderPortfolioSummary():(()=>{
       if(!saves.length) return `<div style="background:white;border:1px solid #c8e6de;border-radius:12px;padding:24px;text-align:center;color:#9ca3af;font-size:13px;margin-bottom:16px;">No saved reports yet.</div>`;
       const RECENT = 3;
       const cardHtml = s => `
@@ -1472,6 +1625,7 @@ function renderHome(){
         : `<button onclick="_homeShowAll=true;renderHome()" style="width:100%;margin-top:4px;padding:9px;border-radius:8px;border:1px solid #c8e6de;background:white;color:#5a8070;font-size:13px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif">Show ${older.length} more older report${older.length===1?'':'s'} ↓</button>`
       ) : "");
     })()}
+    </div>
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">
       <div style="font-size:12px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Data &amp; Backup</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
