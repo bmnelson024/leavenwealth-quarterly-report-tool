@@ -2631,7 +2631,7 @@ body{font-family:Georgia,serif;background:var(--cream);color:var(--text);}
 .ag{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .al{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
 .av{font-size:14px;font-weight:600;color:var(--dark);margin-top:2px;}
-.cg{display:grid;grid-template-columns:1fr 1fr;gap:28px 24px;margin-bottom:32px;}
+.cg{display:grid;grid-template-columns:1fr 1fr;gap:22px 20px;margin-bottom:28px;margin-left:-22px;margin-right:-22px;}
 .cb{margin-bottom:4px;}
 .ct{font-family:sans-serif;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;font-weight:700;margin-bottom:6px;}
 .cb img{width:100%;height:auto;display:block;}
@@ -2822,7 +2822,7 @@ ${(()=>{
   const capexRow = i => `<tr><td>${escapeHtml(i.name)}</td><td>${fmtWhole(i.amount)}</td></tr>`;
   const chartsPage = `<div class="page">
   <div class="pn">${prop}</div><div class="sh">Capex &amp; Maintenance Charts — ${qtr}</div>
-  <div class="cg" style="grid-template-columns:1fr 1fr;gap:24px;">
+  <div class="cg">
     ${["chart_capital_expense:Capital Expense","chart_maintenance_expense:Maintenance Expense"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
   </div>
   <div class="footer-prop">${prop}</div>
@@ -4023,7 +4023,7 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
 .sc .sl{font-family:sans-serif;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;}
 .sc .sv{font-family:sans-serif;font-size:20px;font-weight:700;color:var(--dark);}
 .sc.hl{background:var(--dark);border-color:var(--dark);}.sc.hl .sl{color:var(--teal);}.sc.hl .sv{color:white;}
-.cg{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;}
+.cg{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;margin-left:-14px;margin-right:-14px;}
 .cb{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--teal-light);}
 .ct{font-family:sans-serif;font-size:9px;color:var(--dark);text-transform:uppercase;letter-spacing:1px;font-weight:700;padding:7px 11px;background:white;border-bottom:1px solid var(--border);}
 .cb .np{height:145px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:sans-serif;font-size:12px;}
@@ -4655,7 +4655,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 .sc .sl{font-family:sans-serif;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px;}
 .sc .sv{font-family:sans-serif;font-size:20px;font-weight:700;color:var(--dark);}
 .sc.hl{background:var(--dark);border-color:var(--dark);}.sc.hl .sl{color:var(--teal);}.sc.hl .sv{color:white;}
-.cg{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;}
+.cg{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;margin-left:-14px;margin-right:-14px;}
 .cb{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--teal-light);}
 .ct{font-family:sans-serif;font-size:9px;color:var(--dark);text-transform:uppercase;letter-spacing:1px;font-weight:700;padding:7px 11px;background:white;border-bottom:1px solid var(--border);}
 .cb .np{height:145px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:sans-serif;font-size:12px;}
@@ -8472,4 +8472,3 @@ sb.auth.onAuthStateChange((event, session)=>{
 </script>
 </body>
 </html>
-  
