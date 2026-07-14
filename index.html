@@ -2654,7 +2654,8 @@ body{font-family:Georgia,serif;background:var(--cream);color:var(--text);}
 .rrt{width:100%;border-collapse:collapse;font-family:sans-serif;font-size:10.5px;table-layout:fixed;}
 .rrt th{background:var(--dark);color:white;padding:6px 8px;text-align:left;font-weight:500;font-size:10px;letter-spacing:0.5px;overflow:hidden;}
 .rrt th.cur{text-align:right;}
-.rrt td{padding:5px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;}
+.rrt td{padding:5px 8px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rrt th{white-space:nowrap;}
 .rrt tr.vacant td{color:var(--muted);font-style:italic;}
 .rrt tr:nth-child(even):not(.vacant) td{background:#fafefe;}
 .rrt td.cur{text-align:right;}
@@ -3005,7 +3006,11 @@ ${(()=>{
   // Bed/Bath + Market Rent + Rent with no Lease From/To) fills the table
   // evenly instead of leaving a big empty strip where the missing columns
   // would have sat.
-  const RR_W = {"Unit":10,"Bed/Bath":8,"Lease From":14,"Lease To":14,"Lease Start":14,"Lease End":14,"Market Rent":15,"Rent":12,"Total":12};
+  // Bed/Bath weight 12 (was 8): at 8 the column was ~57px and "2 Bed/1.5 Bath"
+  // wrapped to two lines, doubling row heights and pushing 28-row chunks past
+  // the fixed page height (table bled across the printed page boundary with no
+  // footer). Rows are also white-space:nowrap now so chunk height is predictable.
+  const RR_W = {"Unit":10,"Bed/Bath":12,"Lease From":14,"Lease To":14,"Lease Start":14,"Lease End":14,"Market Rent":14,"Rent":12,"Total":12};
   const rrHdr = m.rentRollHeaders || [];
   const rrWeights = rrHdr.map(h => RR_W[h] || 10);
   const rrTotalWeight = rrWeights.reduce((a,b) => a+b, 0) || 1;
