@@ -462,21 +462,35 @@ async function supaFetchLargeKeysForSave(saveKey){
     console.log('[QRB] supaFetchLargeKeysForSave: done for '+saveKey);
   }catch(e){ console.warn('[QRB] supaFetchLargeKeysForSave exception:',e); }
 }
+// Shared failure flag for the current batch of cloud writes. Any write that is
+// rejected, returns an error, or times out sets this; the "✓ Saved" pill is only
+// shown when the whole batch settles with the flag clear. The flag auto-resets
+// when a new batch begins (first write while none are pending), so the NEXT save
+// attempt gets a fresh verdict. Without this, a rejected write's error status was
+// immediately overwritten by "✓ Saved" from p.finally (audit finding H-4).
+let _cloudWriteFailed = false;
+function _noteWriteFailure(msg){
+  _cloudWriteFailed = true;
+  setAutoSaveStatus('error', msg || 'Save failed — check connection, then save again');
+}
 // dbSet(k, v, onError?) — update the in-memory cache immediately and persist
 // to Supabase in the background. onError is invoked if the background write
 // fails so the UI can surface it (same contract as the old IDB version).
 function dbSet(k,v,onError){
   _dbCache[k]=v;
   if(_isCacheOnlyKey(k)) return;
+  if(_pendingWrites.size===0) _cloudWriteFailed=false; // new batch — fresh verdict
   const payload = { key:k, value:v, updated_at:new Date().toISOString() };
   if(_currentUser && _currentUser.id) payload.updated_by = _currentUser.id;
   const writePromise = sb.from(STORE_TABLE).upsert(payload).then(({error})=>{
     if(error){
       console.warn('Supabase write failed for key:',k,error);
+      _noteWriteFailure('Save failed — check connection, then save again');
       if(typeof onError==='function') try{onError(error);}catch(e){}
     }
   }, err=>{
     console.warn('Supabase write rejected for key:',k,err);
+    _noteWriteFailure('Save failed — check connection, then save again');
     if(typeof onError==='function') try{onError(err);}catch(e){}
   });
   // Race the write against a 12 s timeout so that oversized writes (e.g. large
@@ -486,15 +500,13 @@ function dbSet(k,v,onError){
   // an error instead of letting the pill claim "✓ Saved" (which previously
   // masked hung writes and made saves silently vanish after a reload).
   const _timeoutSentinel={_dbSetTimeout:true};
-  let _timedOut=false;
   const p = Promise.race([
     writePromise,
     new Promise(resolve=>setTimeout(()=>resolve(_timeoutSentinel),12_000))
   ]).then(res=>{
     if(res===_timeoutSentinel){
-      _timedOut=true;
       console.warn('Supabase write timed out (12 s) for key:',k,'— data may not be persisted');
-      setAutoSaveStatus('error','Save timed out — check connection, then save again');
+      _noteWriteFailure('Save timed out — check connection, then save again');
       if(typeof onError==='function') try{onError(new Error('Cloud write timed out — data may not be saved'));}catch(e){}
     }
   });
@@ -502,26 +514,29 @@ function dbSet(k,v,onError){
   setAutoSaveStatus('saving');
   p.finally(()=>{
     _pendingWrites.delete(p);
-    if(_pendingWrites.size===0 && !_timedOut) setAutoSaveStatus('saved');
+    if(_pendingWrites.size===0 && !_cloudWriteFailed) setAutoSaveStatus('saved');
   });
 }
 function dbRemove(k){
   delete _dbCache[k];
   if(_isCacheOnlyKey(k)) return;
+  if(_pendingWrites.size===0) _cloudWriteFailed=false; // new batch — fresh verdict
   setAutoSaveStatus('saving');
   const p = sb.from(STORE_TABLE).delete().eq('key',k).then(({error})=>{
     if(error){
       console.warn('Supabase delete failed for key:',k,error);
+      _noteWriteFailure();
       showError('Warning: Could not remove a record from the cloud ("'+k+'"). Your local data is updated but the change may not persist after a reload.');
     }
   }, err=>{
     console.warn('Supabase delete rejected for key:',k,err);
+    _noteWriteFailure();
     showError('Warning: Could not remove a record from the cloud ("'+k+'"). Your local data is updated but the change may not persist after a reload.');
   });
   _pendingWrites.add(p);
   p.finally(()=>{
     _pendingWrites.delete(p);
-    if(_pendingWrites.size===0) setAutoSaveStatus('saved');
+    if(_pendingWrites.size===0 && !_cloudWriteFailed) setAutoSaveStatus('saved');
   });
 }
 function dbKeys(){return Object.keys(_dbCache);}
@@ -946,8 +961,10 @@ function saveProgress(options){
     dbSet(SAVES_INDEX_KEY,JSON.stringify(idx),onPersistErr);
     state._savedThisStep=true;
     if(options._noFeedback){ /* saveProgressAsync handles feedback after writes settle */ }
-    else if(silent) setAutoSaveStatus('saved');
-    else showToast("✓ Progress saved");
+    // Note: the status pill is owned entirely by dbSet/dbRemove — forcing
+    // 'saved' here would overwrite an in-flight 'saving' or a failure status
+    // while writes are still pending (audit finding H-4).
+    else if(!silent) showToast("✓ Progress saved");
     return true;
   }catch(e){
     if(silent) setAutoSaveStatus('error', 'Save failed');
@@ -967,10 +984,15 @@ async function saveProgressAsync(options){
   if(!ok) return;
   // Brief pause — enough for the main data blob (<100 KB) to settle on a normal
   // connection while keeping the UX snappy. Large chart/file uploads finish in
-  // the background; the pill stays on "Saving…" until they complete.
+  // the background; the pill stays on "Saving…" until they complete and is
+  // owned entirely by dbSet/dbRemove — do NOT force 'saved' here (audit H-4:
+  // that overwrote failure statuses and masked writes that never landed).
   await new Promise(resolve=>setTimeout(resolve, 800));
+  if(_cloudWriteFailed){
+    showToast("⚠️ Save may not have reached the cloud — check the status pill");
+    return;
+  }
   showToast("✓ Progress saved");
-  setAutoSaveStatus('saved');
 }
 // Per-file hash: key + content fingerprint so two different files of the same
 // byte-length don't hash identically and cause a silent save skip.
@@ -1345,6 +1367,13 @@ function confirmAndGenerateInv(){
   showSavePrompt(()=>generateInvestmentReport());
 }
 function confirmAndGenerateVestmint(){
+  // Same annual-fallback gate as confirmAndGenerate / confirmAndGenerateInv —
+  // VestMint runs the same processInvestmentData() that can fall back to
+  // annual totals (~4× too high), so it needs the same protection.
+  if(state._incomeAnnualFallback){
+    showError("⚠️ Report generation is blocked: one or more income statements fell back to annual totals (~4× too high). Re-upload the correct trailing-12 files or fix the Quarter field, then click Process again.");
+    return;
+  }
   if(_flushAndCheckSaved()){generateVestmintReport();return;}
   showSavePrompt(()=>generateVestmintReport());
 }
@@ -1537,7 +1566,7 @@ function renderPortfolioSummary(){
         </select>
         <span style="font-size:12px;color:#9ca3af">${n} propert${n===1?'y':'ies'}</span>
       </div>
-      <button onclick="exportPortfolioToExcel('${escapeHtml(q)}')"
+      <button onclick="exportPortfolioToExcel('${attrJs(q)}')"
         style="background:#1a3a35;color:white;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap">
         ⬇ Export to Excel
       </button>
@@ -4775,7 +4804,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // Scope disclaimer — shown on pages whose metrics cover only the apartment portfolio
   const otherAssetNames=otherAssets.map(a=>a.name).filter(Boolean);
   const scopeNote=otherAssetNames.length>0
-    ?`<div style="font-size:10px;color:#9ca3af;font-family:sans-serif;font-style:italic;margin:-12px 0 14px;">Residential apartment portfolio only &nbsp;·&nbsp; Does not include ${otherAssetNames.join(' or ')}</div>`
+    ?`<div style="font-size:10px;color:#9ca3af;font-family:sans-serif;font-style:italic;margin:-12px 0 14px;">Residential apartment portfolio only &nbsp;·&nbsp; Does not include ${otherAssetNames.map(escapeHtml).join(' or ')}</div>`
     :"";
 
   return `<!DOCTYPE html>
@@ -5578,7 +5607,7 @@ function processDataAppFolio() {
         state.narratives.capex = genNarratives(state.metrics).capex;
       }
     }
-    if(!_silentRehydrate){ state.step=1; state._savedThisStep=false; render(); }
+    if(!_silentRehydrate){ state.step=1; state._savedThisStep=false; preserveErrorsThroughNextRender(); render(); }
   } catch(e){ showError("Error: "+e.message); }
 }
 function processBuildium() {
@@ -5719,7 +5748,7 @@ function processBuildium() {
       // Note: glCapex (AppFolio GL parser) is not used in the Buildium path.
       // Buildium capex comes from the income statement; no narrative auto-fill needed here.
     }
-    if(!_silentRehydrate){ state.step=1; state._savedThisStep=false; render(); }
+    if(!_silentRehydrate){ state.step=1; state._savedThisStep=false; preserveErrorsThroughNextRender(); render(); }
   } catch(e){ showError("Error: "+e.message); }
 }
 // ─── GENERATE REPORT ─────────────────────────────────────────────────────────
@@ -5795,7 +5824,7 @@ function renderVestmintStep2(){
         <button onmousedown="event.preventDefault();document.execCommand('underline')" title="Underline" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;cursor:pointer;color:#1a3a35;text-decoration:underline;line-height:1.4">U</button>
         <button onmousedown="event.preventDefault();document.execCommand('insertUnorderedList')" title="Bullet list" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;cursor:pointer;color:#1a3a35;line-height:1.4">• List</button>
         <div style="width:1px;height:20px;background:#c8e6de;margin:0 2px"></div>
-        <select onmousedown="event.stopPropagation()" onchange="(function(sz){var el=document.getElementById('vm-fund-overview');if(el){el.focus();document.execCommand('styleWithCSS',false,true);document.execCommand('fontSize',false,'7');var spans=el.querySelectorAll('font[size=\'7\']');spans.forEach(function(s){s.removeAttribute('size');s.style.fontSize=sz;});state.vestmintFundOverview=el.innerHTML;}})(this.value);this.value=''" title="Font size" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 6px;font-size:12px;cursor:pointer;color:#1a3a35;height:26px">
+        <select onmousedown="event.stopPropagation()" onchange="(function(sz){var el=document.getElementById('vm-fund-overview');if(el){el.focus();document.execCommand('styleWithCSS',false,true);document.execCommand('fontSize',false,'7');var spans=el.querySelectorAll('font[size=\\'7\\']');spans.forEach(function(s){s.removeAttribute('size');s.style.fontSize=sz;});state.vestmintFundOverview=el.innerHTML;}})(this.value);this.value=''" title="Font size" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 6px;font-size:12px;cursor:pointer;color:#1a3a35;height:26px">
           <option value="" disabled selected>Size</option>
           <option value="10px">Small (10)</option>
           <option value="11px">Small (11)</option>
@@ -5933,12 +5962,12 @@ function renderVestmintStep2(){
             <input type="text" placeholder="Asset name (e.g. Real Freedom Fund LLC)" value="${escapeHtml(a.name||"")}"
               oninput="(function(v){var a=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(a)a.name=v;})(this.value)"
               style="flex:1;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
-            <button onclick="(function(){state.vestmintOtherAssets=state.vestmintOtherAssets.filter(function(x){return x.id!==${a.id};});saveVestmintOtherAssetHtmlForKey(currentSaveKey(),'${a.id}',"");render();})()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer">✕</button>
+            <button onclick="(function(){state.vestmintOtherAssets=state.vestmintOtherAssets.filter(function(x){return x.id!==${a.id};});saveVestmintOtherAssetHtmlForKey(currentSaveKey(),'${a.id}','');render();})()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer">✕</button>
           </div>
           <div style="margin-top:2px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
               <button onclick="loadVestmintOtherAssetHTML('${a.id}')" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer">📄 ${a.html?"Replace HTML":"Upload HTML"}</button>
-              ${a.html?`<button onclick="(function(){var asset=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(asset){asset.html='';saveVestmintOtherAssetHtmlForKey(currentSaveKey(),'${a.id}',"");render();}})()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">✕ Remove</button>`:""}
+              ${a.html?`<button onclick="(function(){var asset=state.vestmintOtherAssets.find(function(x){return x.id===${a.id};});if(asset){asset.html='';saveVestmintOtherAssetHtmlForKey(currentSaveKey(),'${a.id}','');render();}})()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">✕ Remove</button>`:""}
               <span style="font-size:12px;color:${a.html?"#16a34a":"#9ca3af"};font-weight:600">${a.html?"✓ HTML loaded":"No HTML uploaded"}</span>
             </div>
           </div>
@@ -5990,7 +6019,10 @@ function loadVestmintFinancialsPDF(){
       const buf=await f.arrayBuffer();
       const pages=await renderPdfToDataURLs(buf);
       state.vestmintFinancials=pages;
-      saveVestmintFinancialsForKey(currentSaveKey(),pages);
+      saveVestmintFinancialsForKey(currentSaveKey(),pages,err=>{
+        console.warn('[QRB] Financials PDF save failed:',err&&err.message||err);
+        showToast("⚠️ PDF loaded but could not be saved to the cloud — it may be too large. It will need re-uploading next session.");
+      });
       render();
     }catch(err){showError("Could not render PDF: "+err.message);}
   };
@@ -6006,7 +6038,10 @@ function loadVestmintOtherAssetHTML(assetId){
       const asset=state.vestmintOtherAssets.find(a=>String(a.id)===String(assetId));
       if(!asset){showError("Asset not found.");return;}
       asset.html=html;
-      saveVestmintOtherAssetHtmlForKey(currentSaveKey(),assetId,html);
+      saveVestmintOtherAssetHtmlForKey(currentSaveKey(),assetId,html,err=>{
+        console.warn('[QRB] Other-asset HTML save failed:',err&&err.message||err);
+        showToast("⚠️ HTML loaded but could not be saved to the cloud — it may be too large. It will need re-uploading next session.");
+      });
       _refreshVestmintReportHTML();
       render();
     };
@@ -7354,6 +7389,14 @@ function tryAutoFillPropertyName(csvText){
     if(m2&&m2[1].trim()){ state.propertyName=m2[1].trim(); render(); return; }
   }
 }
+// ── Warning-lifecycle plumbing (audit H-2 / M-5) ─────────────────────────────
+// _lastErrCtx: the step/source/home context of the previous render — the error
+// box is cleared only when this changes (step navigation), not on every render.
+// _preserveErrorsOnce: set by the data processors right before their final
+// render() so warnings emitted during processing survive the step transition.
+let _lastErrCtx=null;
+let _preserveErrorsOnce=false;
+function preserveErrorsThroughNextRender(){ _preserveErrorsOnce=true; }
 function showError(msg){
   const el=document.getElementById("error-box");
   if(!msg){ el.textContent=""; el.style.display="none"; return; }
@@ -7366,10 +7409,15 @@ function showError(msg){
 // showWarning accepts trusted HTML markup (e.g. <strong> in the property-tax
 // message). All callers MUST escape any user-derived values before calling it.
 // For plain-text warnings use showWarningText() which handles escaping automatically.
-function showWarning(html){
+function showWarning(html, kind){
   const el=document.getElementById("warning-box");
   if(!el) return;
   el.innerHTML=html; el.style.display=html?"block":"none";
+  // Tag the warning with a kind so specific warnings (e.g. property tax) can be
+  // selectively cleared when their condition resolves, without wiping unrelated
+  // warnings that happen to occupy the same box (audit M-5).
+  if(html && kind) el.dataset.kind=kind;
+  else delete el.dataset.kind;
 }
 function showWarningText(text){
   showWarning(text ? escapeHtml(text) : "");
@@ -7405,9 +7453,12 @@ function propTaxStatus(incomeRows){
 function warnIfNoPropTax(incomeRows, propertyName){
   const status = propTaxStatus(incomeRows);
   if(status === "ok"){
-    // Property taxes found — do NOT call clearWarning() here.
-    // A delinquency or other warning may already be displayed; wiping it
-    // silently just because taxes look fine would hide a separate issue.
+    // Property taxes found — clear a previously-shown PROPERTY-TAX warning so a
+    // fixed income statement doesn't leave a stale banner up forever (audit M-5).
+    // Other warnings (delinquency etc.) are left untouched: we only clear when
+    // the box is tagged with our own kind.
+    const el=document.getElementById("warning-box");
+    if(el && el.dataset.kind==='proptax') clearWarning();
   } else {
     const who = propertyName ? `<strong>${escapeHtml(propertyName)}</strong>` : "this property";
     const detail = status === "zero"
@@ -7417,7 +7468,8 @@ function warnIfNoPropTax(incomeRows, propertyName){
       `⚠️ <strong>Property tax not detected for the current quarter</strong> in the income statement for ${who}. ` +
       `${detail} ` +
       `If property taxes are paid semi-annually rather than monthly, the quarter's expenses will be skewed. ` +
-      `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`
+      `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`,
+      'proptax'
     );
   }
 }
@@ -7713,10 +7765,18 @@ function render(){
       </div>
     </div>`).join("");
   const el=document.getElementById("step-content");
-  // Clear any lingering errors from a prior step so they don't persist into
-  // the next step's view. Investment and VestMint paths do this explicitly;
-  // the single-property path was previously missing this call.
-  clearError();
+  // Clear lingering errors ONLY when the view context (step/source/home) changes.
+  // The previous unconditional clearError() erased warnings emitted by the data
+  // processors one frame after they appeared, because the processors call
+  // render() immediately after showError() (audit H-2). Same-context re-renders
+  // (typing, chart uploads) now leave the error box alone, and the processors set
+  // _preserveErrorsOnce so their warnings survive the step-0 → step-1 transition.
+  const _errCtx=String(state.step)+"|"+String(state.source)+"|"+String(state.showHome);
+  if(_errCtx!==_lastErrCtx){
+    if(_preserveErrorsOnce) _preserveErrorsOnce=false;
+    else clearError();
+  }
+  _lastErrCtx=_errCtx;
   // Required-file lists and the "Still needed" warning were removed — all
   // uploads are now optional, with a confirm modal (processDataWithConfirm)
   // catching accidental omissions of core files per source.
