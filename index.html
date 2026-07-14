@@ -7987,12 +7987,15 @@ function render(){
         <table>
           <thead><tr><th>Metric</th><th>${state.prevQuarterLabel||"Prior Quarter"}</th><th>${state.currentQuarter||""}</th><th>Change</th></tr></thead>
           <tbody>
-            ${[["Avg Occupancy",prev.occupancy+"%",m.occupancy+"%",pct(m.occupancy,prev.occupancy)],
-               ["Total Income",fmt(prev.income),fmt(m.totalIncome),pct(m.totalIncome,prev.income)],
-               ["Operating Expenses",fmt(prev.expenses),fmt(m.totalExpense),pct(m.totalExpense,prev.expenses)],
-               ["NOI",fmt(prev.noi),fmt(m.noi),pct(m.noi,prev.noi)],
-               ["Capex",fmt(prev.capex),fmt(m.capex),pct(m.capex,prev.capex)]
-              ].map(([l,q4,q1,chg])=>`<tr><td>${l}</td><td>${q4}</td><td><strong>${q1}</strong></td><td class="${chg==='N/A'?'chg-neutral':chg.startsWith('+')?"chg-pos":"chg-neg"}">${chg}</td></tr>`).join("")}
+            ${[["Avg Occupancy",prev.occupancy+"%",m.occupancy+"%",pct(m.occupancy,prev.occupancy),false],
+               ["Total Income",fmt(prev.income),fmt(m.totalIncome),pct(m.totalIncome,prev.income),false],
+               ["Operating Expenses",fmt(prev.expenses),fmt(m.totalExpense),pct(m.totalExpense,prev.expenses),true],
+               ["NOI",fmt(prev.noi),fmt(m.noi),pct(m.noi,prev.noi),false],
+               ["Capex",fmt(prev.capex),fmt(m.capex),pct(m.capex,prev.capex),true]
+              // goodDown flag (5th element): for expenses/capex a DECREASE is favorable —
+              // color by direction-adjusted sentiment, not raw sign, matching the
+              // generated report's pos/neg logic (buildReport summary table).
+              ].map(([l,q4,q1,chg,goodDown])=>`<tr><td>${l}</td><td>${q4}</td><td><strong>${q1}</strong></td><td class="${chg==='N/A'?'chg-neutral':(chg.startsWith('+')!==goodDown?"chg-pos":"chg-neg")}">${chg}</td></tr>`).join("")}
           </tbody>
         </table>
       </div>
@@ -8469,3 +8472,4 @@ sb.auth.onAuthStateChange((event, session)=>{
 </script>
 </body>
 </html>
+  
