@@ -1201,6 +1201,7 @@ async function loadSave(key){
       // was created (e.g. bpCurrentRentParsed) get a safe null default rather
       // than undefined when loading older saves.
       businessPlan:{...makeFreshBusinessPlan(),...(data.businessPlan||{})},
+      _bpAutoLoadedFrom:null,  // resumed save carries its own BP — no carry-over badge
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       vestmintFundOverview:data.vestmintFundOverview||"",
@@ -1482,6 +1483,7 @@ function selectSource(src){
   state.invNarrativesEdited = false;
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
   state.businessPlan = makeFreshBusinessPlan();
+  state._bpAutoLoadedFrom = null;
   // VestMint Fund mode
   state.vestmintFundOverview = "";
   state.vestmintFinancials = [];
@@ -5282,7 +5284,15 @@ function renderInvestmentStep0(){
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>`:''}
       </div>
     </div>
-    <div class="section-label">Business Plan Mode <span style="font-weight:400;font-size:11px;color:#9ca3af">— for deals still in remodel / LOC phase</span></div>
+    ${(()=>{
+      // Auto-populate historical BP fields (launch rents, budget, LOC limit) from
+      // the prior quarter's save. Mutates state BEFORE the section below renders,
+      // mirroring the tryAutoLoadPriorOccupancy pattern. Idempotent — a no-op once
+      // BP has any data or no prior save exists.
+      tryAutoLoadPriorBusinessPlan();
+      return "";
+    })()}
+    <div class="section-label">Business Plan Mode <span style="font-weight:400;font-size:11px;color:#9ca3af">— for deals still in remodel / LOC phase</span>${state._bpAutoLoadedFrom&&state.businessPlan.enabled?`<span style="font-size:10px;background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:4px;font-weight:700;margin-left:8px">↺ Launch rents &amp; budget carried from ${escapeHtml(state._bpAutoLoadedFrom)} — re-import CapEx &amp; current rents</span>`:""}</div>
     <div class="econ-box" style="margin-bottom:12px">
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
         <input type="checkbox" ${state.businessPlan.enabled?"checked":""} onchange="state.businessPlan.enabled=this.checked;render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
@@ -6688,28 +6698,35 @@ function _parseQuarterLabel(q){
 //    mirroring the photo/asset-facts fuzzy lookup. Without this, any invisible
 //    difference in how the prior report's name/quarter was typed breaks the
 //    prior-quarter auto-load with "no saved report found".
-function findPrevQuarterSaveKey(){
-  if(!state.propertyName||!state.currentQuarter) return null;
+// Mode-aware core: finds the prior-quarter save key for any report name.
+// wantInv=true matches investment/vestmint saves; false matches single-property.
+function findPrevQuarterSaveKeyFor(name, wantInv){
+  if(!name||!state.currentQuarter) return null;
   const prevLabel=calcPrevQuarterLabel(state.currentQuarter);
   if(!prevLabel) return null;
-  const exactKey=saveKey(state.propertyName,prevLabel);
+  const exactKey=saveKey(name,prevLabel);
   if(dbGet(SAVE_PREFIX+exactKey)) return exactKey;
   const target=_parseQuarterLabel(prevLabel);
   if(!target) return null;
-  const normName=normalizePropertyKey(state.propertyName);
+  const normName=normalizePropertyKey(name);
   if(!normName) return null;
   let best=null,bestScore=0;
   try{
     for(const s of getSavesIndex()){
-      if(!s||s.source==='investment'||s.source==='vestmint') continue;
+      if(!s) continue;
+      const isInvSave=s.source==='investment'||s.source==='vestmint';
+      if(isInvSave!==!!wantInv) continue;
       const pq=_parseQuarterLabel(s.quarter);
       if(!pq||pq.q!==target.q||pq.yr!==target.yr) continue;
       const stored=normalizePropertyKey(s.propertyName||"");
       const score=stored===normName?stored.length+1:fuzzyKeyScore(normName,stored);
       if(score>=5&&score>bestScore){best=s.key;bestScore=score;}
     }
-  }catch(e){console.warn('findPrevQuarterSaveKey scan failed:',e);}
+  }catch(e){console.warn('findPrevQuarterSaveKeyFor scan failed:',e);}
   return best;
+}
+function findPrevQuarterSaveKey(){
+  return findPrevQuarterSaveKeyFor(state.propertyName, false);
 }
 function tryAutoLoadPriorOccupancy(){
   if(!state.propertyName||!state.currentQuarter) return false;
@@ -6736,6 +6753,39 @@ function tryAutoLoadPriorOccupancy(){
       return true;
     }
   }catch(e){console.warn('tryAutoLoadPriorOccupancy failed:',e);}
+  return false;
+}
+// Carries the Business Plan's HISTORICAL fields forward from the prior quarter's
+// saved report so they don't need re-entering every quarter: launch rents
+// (avg + per-unit + manual overrides), total remodel budget, and LOC limit are
+// one-time facts about the deal. Quarter-specific fields — spent to date, units
+// completed/remaining, current rents, capex parse, narrative — are deliberately
+// NOT copied; they should come from this quarter's imports so stale numbers can
+// never ship in a report. Only fires when the current BP is still pristine, so
+// it can never clobber anything the user has typed or imported this session.
+function tryAutoLoadPriorBusinessPlan(){
+  const isInv=state.source==='investment'||state.source==='vestmint';
+  const name=isInv?state.investmentName:state.propertyName;
+  if(!name||!state.currentQuarter) return false;
+  const bp=state.businessPlan||{};
+  if(bp.enabled||bp.launchRentPerUnit||bp.bpLaunchRentParsed||bp.totalBudget) return false;
+  const key=findPrevQuarterSaveKeyFor(name,isInv);
+  if(!key) return false;
+  try{
+    const d=JSON.parse(dbGet(SAVE_PREFIX+key)||"null");
+    const prevBp=d&&d.businessPlan;
+    if(!prevBp||!prevBp.enabled) return false;
+    state.businessPlan={...makeFreshBusinessPlan(),
+      enabled:true,
+      locLimit:prevBp.locLimit||'',
+      totalBudget:prevBp.totalBudget||'',
+      launchRentPerUnit:prevBp.launchRentPerUnit||'',
+      bpLaunchRentParsed:prevBp.bpLaunchRentParsed||null,
+      bpLaunchRentOverrides:prevBp.bpLaunchRentOverrides||{}
+    };
+    state._bpAutoLoadedFrom=(d.currentQuarter||'').trim()||'prior quarter';
+    return true;
+  }catch(e){console.warn('tryAutoLoadPriorBusinessPlan failed:',e);}
   return false;
 }
 function onPropertyNameChange(val){
