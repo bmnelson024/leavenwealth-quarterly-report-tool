@@ -2794,10 +2794,11 @@ ${secOn.leasing?`<div class="page">
     ${m.renewals?`<div class="lc"><div class="ll">Renewals</div><div class="lv">${m.renewals}</div></div>`:""}
     ${m.inquiries?`<div class="lc"><div class="ll">Inquiries</div><div class="lv">${m.inquiries}</div></div>`:""}
     ${m.applications?`<div class="lc"><div class="ll">Applications</div><div class="lv">${m.applications}</div></div>`:""}
+    ${state.source==='buildium'?"":`
     ${m.lossToLease?`<div class="lc"><div class="ll">Loss to Lease</div><div class="lv">${fmtWhole(m.lossToLease)}</div></div>`:""}
     ${(m.delinquency||m.delinquencyKnown)?`<div class="lc"><div class="ll">Delinquency</div><div class="lv">${fmtWhole(m.delinquency)}</div></div>`:""}
     ${m.avgEconOcc?`<div class="lc"><div class="ll">Avg Econ. Occupancy</div><div class="lv">${m.avgEconOcc}%</div></div>`:""}
-    ${m.capex?`<div class="lc"><div class="ll">Capex Total</div><div class="lv">${fmtWhole(m.capex)}</div></div>`:""}
+    ${m.capex?`<div class="lc"><div class="ll">Capex Total</div><div class="lv">${fmtWhole(m.capex)}</div></div>`:""}`}
   </div>
   ${_hasLeasingCharts?`<div class="cg">
     ${["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_occupancy_rate:Occupancy Rate","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
