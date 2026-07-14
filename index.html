@@ -293,6 +293,13 @@ const STORE_TABLE = "qr_store";
 // Supabase upsert hadn't landed yet, causing the fresh fetch to return the
 // old server-side value and silently reverting the user's change.
 const _pendingWrites = new Set();
+// While a supaBootstrap fetch is in flight, this Set records every key written
+// (dbSet) or deleted (dbRemove) locally. The fetch snapshot predates those
+// changes, so the cache swap must keep the LOCAL value for these keys — the
+// server already has (or will have) the new value, and restoring the stale
+// fetched value would silently revert the user's just-made change in memory
+// until the next reload (audit M-2). Null when no bootstrap is in flight.
+let _writesSinceFetch = null;
 // Keys that are intentionally NOT synced to Supabase (cache-only).
 // - SAVES_INDEX_KEY is derived from SAVE_PREFIX rows on every login.
 // (FILES_PREFIX / INV_FILES_PREFIX used to be cache-only to save storage
@@ -337,13 +344,18 @@ async function supaBootstrap(){
     const fresh = {};
     const pageSize = 1000;
     let from = 0;
+    // Begin tracking local writes for the duration of the fetch (audit M-2).
+    _writesSinceFetch = new Set();
     while(true){
       let q = sb.from(STORE_TABLE).select("key,value");
       for(const pfx of LARGE_KEY_PREFIXES) q = q.not('key','like',pfx+'%');
       const { data, error } = await q
         // Belt-and-suspenders: enforce user scoping in the query even though
         // RLS should already restrict rows. Guards against RLS misconfiguration.
-        .eq('updated_by', _currentUser.id)
+        // Untagged legacy rows (updated_by IS NULL — written before the column
+        // was tracked, or during a brief auth gap) are included so old saves
+        // never silently vanish from the home screen (audit M-1).
+        .or('updated_by.eq.'+_currentUser.id+',updated_by.is.null')
         .range(from, from + pageSize - 1)
         .abortSignal(abortCtrl.signal);
       if(error) throw error;
@@ -363,9 +375,23 @@ async function supaBootstrap(){
       console.log('[QRB] supaBootstrap: waiting for',_pendingWrites.size,'in-flight write(s) to settle');
       await Promise.allSettled([..._pendingWrites]);
     }
+    // Keys written/deleted locally while the fetch was in flight: the fetched
+    // snapshot predates them, so the LOCAL values win the swap (audit M-2).
+    // Capture them before wiping the cache.
+    const _localWins = {};
+    const _localDeletes = new Set();
+    if(_writesSinceFetch){
+      for(const k of _writesSinceFetch){
+        if(Object.prototype.hasOwnProperty.call(_dbCache,k)) _localWins[k]=_dbCache[k];
+        else _localDeletes.add(k); // dbRemove'd during fetch — keep it gone
+      }
+      if(_writesSinceFetch.size>0) console.log('[QRB] supaBootstrap: preserving',_writesSinceFetch.size,'key(s) written during fetch');
+    }
     // Only now swap the cache — all-or-nothing, no partial wipe.
     for(const k of Object.keys(_dbCache)) delete _dbCache[k];
     for(const [k,v] of Object.entries(fresh)) _dbCache[k] = v;
+    for(const [k,v] of Object.entries(_localWins)) _dbCache[k] = v;
+    for(const k of _localDeletes) delete _dbCache[k];
     // Rebuild the saves index from the lw_save_* rows we just loaded so the
     // home screen can list everyone's reports even if a teammate saved while
     // you were offline.
@@ -390,6 +416,9 @@ async function supaBootstrap(){
     console.log(`[QRB] supaBootstrap: index built with ${idx.length} saves`);
   } finally {
     clearTimeout(abortTimer); // no-op if already cleared on success path
+    // Stop tracking local writes — the swap (if reached) has consumed the set;
+    // on the error path there is nothing to reconcile (cache wasn't touched).
+    _writesSinceFetch=null;
     // Always release the lock — even if the Supabase query threw — so that
     // retries and TOKEN_REFRESHED re-runs are never permanently blocked.
     _bootstrapInFlight=false;
@@ -454,7 +483,8 @@ async function supaFetchLargeKeysForSave(saveKey){
       sb.from(STORE_TABLE)
         .select("key,value")
         .like('key', VESTMINT_OTHER_PREFIX+saveKey+'_%')
-        .eq('updated_by', _currentUser.id),
+        // Match supaBootstrap: include untagged legacy rows (audit M-1).
+        .or('updated_by.eq.'+_currentUser.id+',updated_by.is.null'),
       _timeout(10_000)
     ]);
     if(otherError){ console.warn('[QRB] supaFetchLargeKeysForSave other-assets error:',otherError); }
@@ -479,6 +509,7 @@ function _noteWriteFailure(msg){
 function dbSet(k,v,onError){
   _dbCache[k]=v;
   if(_isCacheOnlyKey(k)) return;
+  if(_writesSinceFetch) _writesSinceFetch.add(k); // local value must win the bootstrap swap (M-2)
   if(_pendingWrites.size===0) _cloudWriteFailed=false; // new batch — fresh verdict
   const payload = { key:k, value:v, updated_at:new Date().toISOString() };
   if(_currentUser && _currentUser.id) payload.updated_by = _currentUser.id;
@@ -520,6 +551,7 @@ function dbSet(k,v,onError){
 function dbRemove(k){
   delete _dbCache[k];
   if(_isCacheOnlyKey(k)) return;
+  if(_writesSinceFetch) _writesSinceFetch.add(k); // local deletion must win the bootstrap swap (M-2)
   if(_pendingWrites.size===0) _cloudWriteFailed=false; // new batch — fresh verdict
   setAutoSaveStatus('saving');
   const p = sb.from(STORE_TABLE).delete().eq('key',k).then(({error})=>{
@@ -3517,7 +3549,10 @@ function uploadBpCurrentRent(){
             rows=rawArrays.slice(hi+1).map(arr=>{const o={};headers.forEach((h,i)=>{o[h]=arr[i]===undefined?"":arr[i];});return o;});
             const bdRows=rows.filter(isBuildiumUnitRow);
             if(bdRows.length>0) rows=bdRows;
-            else rows=rows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+            // Bed/bath rollup exclusion matches the CSV path below — without it a
+            // "1 Bed/1 Bath" summary row normalizes to unit key "1" and silently
+            // overwrites real unit 1's rent in the ROI map (audit M-3).
+            else rows=rows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u)&&!/^\d+\s*(bed|bath|br|ba)\b/i.test(u);});
           }catch(_){failed.push(f.name);if(++done===files.length)afterAll();return;}
         } else {
           const bdRows=parseDelim(skipMetaRows(raw||"")).filter(isBuildiumUnitRow);
@@ -3549,8 +3584,12 @@ function uploadBpCurrentRent(){
       }
       const avg=Math.round(totalRent/totalOccUnits);
       state.businessPlan.bpCurrentRentParsed={avgRent:avg,totalRent,occUnits:totalOccUnits,fileCount:files.length-failed.length,unitRents:mergedUnitRents};
-      // Also push into invMetrics so the aggregate display stays in sync
-      if(state.invMetrics) state.invMetrics.unitCurrentRents=mergedUnitRents;
+      // Also push into invMetrics so the aggregate display stays in sync.
+      // MERGE rather than replace (audit M-3): importing a current rent roll for
+      // only one of several properties must not wipe the entries built from the
+      // other properties' rr3 files — that silently dropped their remodeled
+      // units from the Remodel ROI matching.
+      if(state.invMetrics) state.invMetrics.unitCurrentRents={...(state.invMetrics.unitCurrentRents||{}),...mergedUnitRents};
       render();
     }
   }; inp.click();
@@ -3841,7 +3880,12 @@ function processInvestmentData(opts){
         const pct=(p.occupancy>0)?p.occupancy:0;
         return s+(pct>0?((p.unitCount||0)*(pct/100)):0);
       },0);
-      if(totalOccupied>0&&totalRent>0){
+      // Respect a manual correction (audit M-4): the UI sets _rentCurrentAutoFilled
+      // to false when the operator types their own value — re-processing must not
+      // clobber it back to the auto-computed number. Auto-fill only when the field
+      // is empty or still carrying a previous auto value.
+      const manuallyEdited = bp._rentCurrentAutoFilled===false && bp.rentCurrent;
+      if(totalOccupied>0&&totalRent>0&&!manuallyEdited){
         state[bpKey].rentCurrent=String(Math.round(totalRent/totalOccupied));
         state[bpKey]._rentCurrentAutoFilled=true;
       }
@@ -3947,7 +3991,9 @@ function genBpNarrative(){
   if(remodels.length>0){
     const launchRents=(bp.bpLaunchRentParsed&&bp.bpLaunchRentParsed.unitRents)||{};
     const overrides=bp.bpLaunchRentOverrides||{};
-    const currentRents=(bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+    // Merge, don't short-circuit (audit M-3): an imported current-rent file for one
+    // property must supplement — not hide — the rents built from other properties' rr3s.
+    const currentRents={...((state.invMetrics&&state.invMetrics.unitCurrentRents)||{}),...((bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||{})};
     let totalUplift=0,roiUnits=0;
     remodels.forEach(u=>{
       const nk=normUnitKey(u.unit);
@@ -4397,7 +4443,8 @@ ${(()=>{
   // ROI calculation
   const _launchRents3=(_bp3.bpLaunchRentParsed&&_bp3.bpLaunchRentParsed.unitRents)||{};
   const _overrides3=_bp3.bpLaunchRentOverrides||{};
-  const _currentRents3=(_bp3.bpCurrentRentParsed&&_bp3.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+  // Merge, don't short-circuit (audit M-3) — see uploadBpCurrentRent.
+  const _currentRents3={...((state.invMetrics&&state.invMetrics.unitCurrentRents)||{}),...((_bp3.bpCurrentRentParsed&&_bp3.bpCurrentRentParsed.unitRents)||{})};
   let _totalUplift3=0, _roiUnits3=0;
   _remodels3.forEach(u=>{
     const nk=normUnitKey(u.unit);
@@ -4709,15 +4756,26 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 .fs-img{width:100%;max-height:880px;object-fit:contain;object-position:top left;display:block;border:1px solid var(--border);border-radius:4px;margin-bottom:0;}
 @media print{@page{margin:0;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}body{background:white;}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page;}.page:last-child{page-break-after:auto;}img{box-shadow:none;}}`;
 
-  // Fund overview text → convert line-breaks + bullet chars to HTML
-  // Strip dangerous constructs from fund-overview HTML before injecting into the
-  // report iframe — <script> tags, event attributes (onclick, onload, etc.), and
-  // javascript: hrefs. Low-risk for a single trusted operator but good hygiene.
-  const _sanitizeOverviewHtml=(html)=>html
-    .replace(/<script[\s\S]*?<\/script>/gi,"")
-    .replace(/<iframe[\s\S]*?(?:<\/iframe>|>)/gi,"")
-    .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi,"")
-    .replace(/(href|src)\s*=\s*["']?javascript:[^"'\s>]*/gi,"$1=\"#\"");
+  // Strip dangerous constructs from HTML before injecting into the report —
+  // <script>/<iframe>/<object>/<embed> tags, event attributes (onclick, onload,
+  // etc., including slash-delimited like <img/onerror=), and javascript: hrefs.
+  // Applied to BOTH the fund-overview rich text and uploaded Other-Asset pages:
+  // asset HTML is often authored by external fund managers, so it must not be
+  // trusted (audit H-5). Runs to a fixpoint so nested payloads like
+  // <scr<script>ipt> can't survive a single replacement pass.
+  const _sanitizeOverviewHtml=(html)=>{
+    let out=String(html||""), prev;
+    do{
+      prev=out;
+      out=out
+        .replace(/<script[\s\S]*?(?:<\/script>|$)/gi,"")
+        .replace(/<iframe[\s\S]*?(?:<\/iframe>|>)/gi,"")
+        .replace(/<(?:object|embed)[\s\S]*?>/gi,"")
+        .replace(/[\s\/]+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi,"")
+        .replace(/(href|src)\s*=\s*["']?javascript:[^"'\s>]*/gi,"$1=\"#\"");
+    }while(out!==prev);
+    return out;
+  };
   const fmtOverview=(raw)=>{
     if(!raw) return "";
     // If the content contains HTML tags (from the rich-text editor), sanitize then pass through.
@@ -4936,7 +4994,11 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   // Extract inner content of .rf-report so each split chunk can be re-wrapped in its own
   // .rf-report div — this ensures otherAssetOverrides CSS (padding, margin) applies to all pages.
   const rfInnerMatch=body.match(/class="rf-report"[^>]*>([\s\S]*)<\/div>\s*$/i);
-  const innerContent=rfInnerMatch?rfInnerMatch[1]:body;
+  // Sanitize partner-uploaded asset HTML before it enters the report (audit H-5):
+  // these pages are typically authored by external fund managers, and the report
+  // renders in a same-origin iframe — an embedded script would otherwise run
+  // with full access to the app session. Static content passes through intact.
+  const innerContent=_sanitizeOverviewHtml(rfInnerMatch?rfInnerMatch[1]:body);
   // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
   // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
   const CHARS_PER_PAGE=3500;
@@ -5311,7 +5373,8 @@ function renderInvestmentStep0(){
           if(!remodels.length) return '';
           const launchRents=(state.businessPlan.bpLaunchRentParsed&&state.businessPlan.bpLaunchRentParsed.unitRents)||{};
           const overrides=state.businessPlan.bpLaunchRentOverrides||{};
-          const currentRents=(state.businessPlan.bpCurrentRentParsed&&state.businessPlan.bpCurrentRentParsed.unitRents)||(state.invMetrics&&state.invMetrics.unitCurrentRents)||{};
+          // Merge, don't short-circuit (audit M-3) — see uploadBpCurrentRent.
+          const currentRents={...((state.invMetrics&&state.invMetrics.unitCurrentRents)||{}),...((state.businessPlan.bpCurrentRentParsed&&state.businessPlan.bpCurrentRentParsed.unitRents)||{})};
           // Auto-refresh unit rent map if invMetrics exists but map is empty
           // (happens when a saved report is resumed without re-clicking Process)
           if(state.invMetrics&&Object.keys(currentRents).length===0&&!state._bpRentRefreshing){
@@ -7735,9 +7798,9 @@ function render(){
         </div>
         <div class="print-instructions"><strong>📄 To save as PDF:</strong> Click <strong>Print / Save PDF</strong> above → set Destination to <strong>Save as PDF</strong> → click Save.</div>
         <div style="width:100%;height:820px;border:1px solid #c8e6de;border-radius:8px;overflow:hidden;">
-          <iframe id="vm-preview-frame" srcdoc="" style="width:100%;height:100%;border:none;"></iframe>
+          <iframe id="vm-preview-frame" srcdoc="" sandbox="allow-same-origin allow-modals" style="width:100%;height:100%;border:none;"></iframe>
         </div>
-        <iframe id="vm-print-frame" srcdoc="" style="position:fixed;top:0;left:-820px;width:816px;height:1056px;border:none;opacity:0;pointer-events:none;"></iframe>
+        <iframe id="vm-print-frame" srcdoc="" sandbox="allow-same-origin allow-modals" style="position:fixed;top:0;left:-820px;width:816px;height:1056px;border:none;opacity:0;pointer-events:none;"></iframe>
         <div style="display:flex;gap:8px;margin-top:10px">
           ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
           <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new report? Clears all fund data.')){resetAll()}">+ Start New Report</button>
@@ -8489,12 +8552,21 @@ sb.auth.onAuthStateChange((event, session)=>{
     if(_signingOut){
       // Intentional sign-out — reload for a clean slate.
       window.location.reload();
+    } else if(_currentUser){
+      // Session expired while signed in and working. Reload for a clean slate:
+      // the in-memory report state, autosave timers, and dedup caches would
+      // otherwise survive into the next login on this tab, risking one
+      // account's data being autosaved into another (audit M-8). Anything
+      // saved/autosaved before expiry comes back on sign-in; unsaved seconds
+      // of typing were already unpersistable once the session died.
+      console.log('[QRB] SIGNED_OUT (session expired) — reloading for a clean slate');
+      window.location.reload();
     } else {
-      // Supabase-initiated (token expired / revoked). Do NOT reload — that
-      // would wipe a sign-in that may be in progress right now (e.g. the user
-      // clicked Sign In just as the old token expired). Instead, clear cache
-      // and surface the login screen so they can re-authenticate.
-      console.log('[QRB] SIGNED_OUT (external) — clearing state and showing login');
+      // Supabase-initiated sign-out BEFORE anyone was booted in (e.g. a stale
+      // token cleared during the login screen). Do NOT reload — that would
+      // wipe a sign-in that may be in progress right now. Just clear cache
+      // and surface the login screen.
+      console.log('[QRB] SIGNED_OUT (external, pre-boot) — clearing state and showing login');
       _currentUser = null;
       _bootAfterAuthInFlight = false; // allow a fresh boot on next sign-in
       for(const k of Object.keys(_dbCache)) delete _dbCache[k];
