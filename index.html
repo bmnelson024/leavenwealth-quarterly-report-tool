@@ -2437,7 +2437,9 @@ async function rewriteWithClaude(kind){
           metrics: {
             totalIncome: metrics.totalIncome, totalExpense: metrics.totalExpense, noi: metrics.noi,
             occupancy: metrics.occupancy, avgEconOcc: metrics.avgEconOcc,
-            delinquency: metrics.delinquency, lossToLease: metrics.lossToLease,
+            // lossToLease intentionally omitted — metric is unreliable and was
+            // removed from the investment report; Claude must not narrate it.
+            delinquency: metrics.delinquency,
             newLeases: metrics.newLeases, renewals: metrics.renewals,
             inquiries: metrics.inquiries, applications: metrics.applications,
             propertyCount: metrics.propertyCount, totalUnits: metrics.totalUnits,
@@ -2450,7 +2452,7 @@ async function rewriteWithClaude(kind){
               occupancyAvg: p.occupancy,
               avgEconOcc: p.avgEconOcc||"",
               econOccMonthly: p.econOccMonthly||{m1:"",m2:"",m3:""},
-              lossToLease: p.lossToLease||0,
+              // per-property lossToLease intentionally omitted (see portfolio note)
               delinquency: p.delinquency||0,
               delinquencyKnown: !!p.delinquencyKnown,
               // Top income line items so Claude can comment on what's driving revenue
@@ -2488,7 +2490,10 @@ async function rewriteWithClaude(kind){
             totalIncome: metrics.totalIncome, totalExpense: metrics.totalExpense, noi: metrics.noi,
             occupancy: metrics.occupancy, avgEconOcc: metrics.avgEconOcc,
             unitCount: metrics.unitCount, monthlyRent: metrics.monthlyRent,
-            lossToLease: metrics.lossToLease, delinquency: metrics.delinquency,
+            // Buildium loss-to-lease is unreliable and its tile is suppressed in
+            // the report — don't let Claude narrate it either. AppFolio keeps it.
+            lossToLease: state.source==='buildium' ? undefined : metrics.lossToLease,
+            delinquency: metrics.delinquency,
             newLeases: metrics.newLeases, renewals: metrics.renewals,
             inquiries: metrics.inquiries, applications: metrics.applications,
             capex: metrics.capex||0, cashOnHand: metrics.cashOnHand||0,
@@ -4514,7 +4519,11 @@ ${sec.leasingSection?`
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Leasing — ${qtr}</div>
   <div class="lg">
-    <div class="lc"><div class="ll">Loss to Lease (Weighted)</div><div class="lv">${fmtWhole(m.lossToLease)}</div></div>
+    ${""/* Loss to Lease removed — metric not reliable enough for investor-facing
+         reports (same reasoning as the Buildium single-property removal). Avg
+         Physical Occupancy takes its slot: keeps the 2×3 grid balanced and
+         mirrors the VestMint fund report's leasing page. */}
+    <div class="lc"><div class="ll">Avg Physical Occupancy (Weighted)</div><div class="lv">${m.occupancy}%</div></div>
     <div class="lc"><div class="ll">New Leases</div><div class="lv">${m.newLeases}</div></div>
     <div class="lc"><div class="ll">Lease Renewals</div><div class="lv">${m.renewals}</div></div>
     <div class="lc"><div class="ll">Prospect Inquiries</div><div class="lv">${m.inquiries}</div></div>
@@ -4534,7 +4543,6 @@ ${sec.leasingSection?`
   <div class="pn">${inv}</div><div class="sh">Footnotes</div>
   <div class="fn">
     <p>*** Economic Occupancy is calculated as follows: Total Quarterly Income / Total Quarterly Income Expected (assuming full rent)</p><br>
-    <p>*** Loss to Lease is calculated as follows: (Gross Potential Rent – Market Rent of Vacant Units) – Actual Current Rent</p><br>
     <p>*** Cash on Hand is the bank balance prior to any distributions for the current quarter</p><br>
     <p>*** Financial Reports are unaudited cash basis reports provided by the property management company for the asset</p><br>
     <p>*** Financials are not considered final until calendar year is complete +45 days. Variances found after quarterly report publication will be vetted and material variances will be disclosed on the following quarterly report</p>
