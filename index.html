@@ -7817,7 +7817,7 @@ function render(){
         <iframe id="inv-print-frame" srcdoc="" style="position:fixed;top:0;left:-820px;width:816px;height:1056px;border:none;opacity:0;pointer-events:none;"></iframe>
         <div style="display:flex;gap:8px;margin-top:10px">
           ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
-          <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new report? Clears all investment data.')){resetAll()}">+ Start New Report</button>
+          <button class="new-quarter-btn" style="margin-top:0" onclick="startNextQuarterConfirm()">+ Start Next Quarter</button>
         </div>`;
       setTimeout(()=>{
         const pv=document.getElementById("inv-preview-frame");
@@ -7915,7 +7915,7 @@ function render(){
         <iframe id="vm-print-frame" srcdoc="" sandbox="allow-same-origin allow-modals" style="position:fixed;top:0;left:-820px;width:816px;height:1056px;border:none;opacity:0;pointer-events:none;"></iframe>
         <div style="display:flex;gap:8px;margin-top:10px">
           ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
-          <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new report? Clears all fund data.')){resetAll()}">+ Start New Report</button>
+          <button class="new-quarter-btn" style="margin-top:0" onclick="startNextQuarterConfirm()">+ Start Next Quarter</button>
         </div>`;
       setTimeout(()=>{
         const pv=document.getElementById("vm-preview-frame");
@@ -8356,7 +8356,7 @@ function render(){
       <iframe id="print-frame" srcdoc="" style="position:fixed;top:0;left:-820px;width:816px;height:1056px;border:none;opacity:0;pointer-events:none;"></iframe>
       <div style="display:flex;gap:8px;margin-top:10px">
         ${_hasSaves?`<button class="new-quarter-btn" style="background:white;color:#1a3a35;border:1.5px solid #c8e6de;margin-top:0" onclick="state.showHome=true;render()">🏠 All Reports</button>`:""}
-        <button class="new-quarter-btn" style="margin-top:0" onclick="if(confirm('Start new quarter? Clears all data.')){resetAll()}">+ Start New Quarter</button>
+        <button class="new-quarter-btn" style="margin-top:0" onclick="startNextQuarterConfirm()">+ Start Next Quarter</button>
       </div>`;
     setTimeout(()=>{
       const preview=document.getElementById("preview-frame");
@@ -8385,6 +8385,53 @@ function resetAll(){
   state = _makeDefaultState();
   state.showHome = getSavesIndex().length > 0;
   render();
+}
+// "Q1 2026" → "Q2 2026" (Q4 rolls into Q1 of the next year).
+function calcNextQuarterLabel(quarter){
+  const m=_parseQuarterLabel(quarter);
+  if(!m) return null;
+  return m.q===4?`Q1 ${m.yr+1}`:`Q${m.q+1} ${m.yr}`;
+}
+// "Start New Quarter" — previously just resetAll(), which cleared the form and
+// dumped the user on the home screen with no indication anything happened (the
+// saved report is intentionally untouched, so it looked like a no-op). Now it
+// actually STARTS the next quarter: silently saves the current report, resets
+// the form keeping the same source, carries the property/investment name over,
+// pre-fills the next quarter label, and re-fires the property-scoped auto-loads
+// (photo, asset facts, prior-quarter occupancy; the investment Business Plan
+// carry-forward fires from its render hook).
+function startNextQuarterConfirm(){
+  const isInv=state.source==='investment'||state.source==='vestmint';
+  const name=isInv?(state.investmentName||""):(state.propertyName||"");
+  const nextQ=calcNextQuarterLabel(state.currentQuarter||"");
+  const msg=(nextQ&&name)
+    ?`Start ${nextQ} for ${name}?\n\nYour current report will be saved and stays in All Reports. The form resets for the new quarter with prior-quarter data carried over automatically.`
+    :`Start a new report?\n\nYour current report will be saved and stays in All Reports.`;
+  if(confirm(msg)) startNextQuarter();
+}
+function startNextQuarter(){
+  const src=state.source;
+  const isInv=src==='investment'||src==='vestmint';
+  const name=isInv?(state.investmentName||""):(state.propertyName||"");
+  const nextQ=calcNextQuarterLabel(state.currentQuarter||"");
+  // Best-effort save so nothing in the current form is lost.
+  try{saveProgress({silent:true,allowEmpty:true});}catch(e){console.warn('startNextQuarter: pre-save failed:',e);}
+  if(!nextQ||!name){ resetAll(); return; } // can't infer context — fall back to old behavior
+  selectSource(src);       // clean mode-preserving reset (also renders — harmless)
+  if(isInv) state.investmentName=name; else state.propertyName=name;
+  state.currentQuarter=nextQ;
+  state.showHome=false;
+  state.step=0;
+  if(!isInv){
+    // Re-fire the property-scoped auto-loads that normally run on name blur.
+    const savedPhoto=loadPhotoForProperty(name);
+    if(savedPhoto){ state.propertyPhoto=savedPhoto; state.photoAutoLoaded=true; }
+    const facts=loadAssetFactsForProperty(name);
+    if(facts) state.assetFacts=facts;
+    tryAutoLoadPriorOccupancy();
+  }
+  render();
+  showToast(`✓ Started ${nextQ} for ${name} — prior-quarter data auto-loaded where available`);
 }
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 let _authMode = "signin"; // "signin" | "signup"
