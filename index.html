@@ -4147,7 +4147,16 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
 </div>
 <!-- PAGE 2: SUMMARY — narratives + QoQ comparison -->
 ${(()=>{
-  const summaryOverflow = (n.income.length + n.expenses.length + (n.capex||"").length + n.outlook.length) > 1200 || n.outlook.length > 500;
+  // Overflow heuristic — mirrors the single-property report's capexToP2/outlookToP2
+  // logic. Page 2 carries the QoQ table plus narratives; a long Capital Expenditures
+  // paragraph (common for multi-property portfolios, which itemize per property)
+  // previously stayed on page 2 unconditionally and bled across the printed page
+  // boundary mid-sentence. Now capex moves to the continuation page when it's long
+  // (>500 chars) or the first three narratives together are long (>1100 chars);
+  // outlook follows whenever capex moves, or under its own prior thresholds.
+  const n_i=n.income.length, n_e=n.expenses.length, n_c=(n.capex||"").length, n_o=n.outlook.length;
+  const capexToP2 = n_c > 500 || (n_i + n_e + n_c) > 1100;
+  const outlookToP2 = capexToP2 || (n_i + n_e + n_c + n_o) > 1200 || n_o > 500;
   const prevQtrLabel=calcPrevQuarterLabel(qtr)||"Prior Quarter";
   const tbl=`<table class="st"><thead><tr><th>Metric</th><th>${prevQtrLabel}</th><th>${qtr}</th><th>Change</th></tr></thead><tbody>
     <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td><td class="${prev&&m.totalIncome>=prev.totalIncome?"neg":"pos"}">${fmtChg(m.totalIncome,prev?.totalIncome??null)}</td></tr>
@@ -4162,15 +4171,17 @@ ${(()=>{
   ${tbl}
   <div class="ns"><div class="nl">Income &amp; Occupancy</div><p class="nt">${escapeHtml(n.income).replace(/\n/g,'<br>')}</p></div>
   <div class="ns"><div class="nl">Expenses</div><p class="nt">${escapeHtml(n.expenses).replace(/\n/g,'<br>')}</p></div>
-  ${n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,'<br>')}</p></div>`:""}
-  ${!summaryOverflow?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${!capexToP2 && n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${!outlookToP2 && n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`;
-  const page2b=summaryOverflow?`
-<!-- PAGE 2b: SUMMARY CONTINUED — outlook -->
+  const needPage2b = (capexToP2 && n.capex) || (outlookToP2 && n.outlook);
+  const page2b=needPage2b?`
+<!-- PAGE 2b: SUMMARY CONTINUED — overflowed narratives -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Summary — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
-  <div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>
+  ${capexToP2 && n.capex?`<div class="ns"><div class="nl">Capital Expenditures</div><p class="nt">${escapeHtml(n.capex).replace(/\n/g,'<br>')}</p></div>`:""}
+  ${outlookToP2 && n.outlook?`<div class="ns"><div class="nl">Outlook</div><p class="nt">${escapeHtml(n.outlook).replace(/\n/g,'<br>')}</p></div>`:""}
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`:"";
   return page2+page2b;
