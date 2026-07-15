@@ -45,7 +45,7 @@
   .photo-box { background: #e6f9f4; border-radius: 10px; padding: 16px; border: 1px solid #c8e6de; margin-bottom: 8px; }
   .process-btn { margin-top: 12px; width: 100%; padding: 12px 0; border-radius: 8px; border: none; background: #1a3a35; color: white; font-weight: 700; font-size: 15px; cursor: pointer; font-family: Inter, sans-serif; }
   .process-btn:disabled { background: #e5e7eb; color: #9ca3af; cursor: not-allowed; }
-  .error-box { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; color: #dc2626; font-size: 13px; }
+  .error-box { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; color: #dc2626; font-size: 13px; white-space: pre-line; }
   .warning-box { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; color: #92400e; font-size: 13px; }
   .metric-box { background: #e6f9f4; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
   .metric-box-title { font-size: 12px; font-weight: 700; color: #1a3a35; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
@@ -728,7 +728,6 @@ function _makeDefaultState(){
     vestmintFinancials: [],     // array of data URLs — pages rendered from uploaded financial-statement PDFs
     vestmintOtherAssets: [],    // [{id, name, html:''}] — dynamically added investment sections (html = raw HTML string from uploaded .html file)
     vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
-    vestmintHasProForma: true,
     vestmintBpGreenway: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', rentAtPurchase:'', rentCurrent:'', narrative:'' },
     vestmintBpBrentVillage: { enabled:false, unitsCompleted:'', unitsRemaining:'', totalBudget:'', spentToDate:'', rentAtPurchase:'', rentCurrent:'', narrative:'' },
     vmReportHTML: null,
@@ -741,7 +740,10 @@ function _makeDefaultState(){
 let state = _makeDefaultState();
 // ─── SAVE / RESUME ───────────────────────────────────────────────────────────
 function getSavesIndex(){try{return JSON.parse(dbGet(SAVES_INDEX_KEY)||"[]");}catch(e){return[];}}
-function saveKey(name,quarter){return(name+"_"+quarter).replace(/['''ʼ]/g,"").replace(/[^a-z0-9]/gi,"_").toLowerCase();}
+// Apostrophe class includes curly quotes (U+2018/U+2019) so "Patrick's Place"
+// typed with macOS smart quotes produces the same key as the straight-quote
+// spelling — matches communityMatches' normalization (audit L-1).
+function saveKey(name,quarter){return(name+"_"+quarter).replace(/['‘’ʼ]/g,"").replace(/[^a-z0-9]/gi,"_").toLowerCase();}
 function saveChartsForKey(k,charts,onErr){if(!k)return;dbSet(CHARTS_PREFIX+k,JSON.stringify(charts),onErr);}
 function loadChartsForKey(k){if(!k)return null;try{const d=dbGet(CHARTS_PREFIX+k);return d?JSON.parse(d):null;}catch(e){return null;}}
 function saveInvChartsForKey(k,charts,onErr){if(!k)return;dbSet(INV_CHARTS_PREFIX+k,JSON.stringify(charts),onErr);}
@@ -947,7 +949,6 @@ function saveProgress(options){
     vestmintFundOverview:state.vestmintFundOverview||"",
     vestmintOtherAssets:(state.vestmintOtherAssets||[]).map(a=>({id:a.id,name:a.name})),
     vestmintSections:state.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
-    vestmintHasProForma:state.vestmintHasProForma!==false,
     vestmintBpGreenway:state.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''},
     vestmintBpBrentVillage:state.vestmintBpBrentVillage||{enabled:false,rentAtPurchase:'',rentCurrent:'',narrative:''},
     narrativesEdited:!!state.narrativesEdited,
@@ -1038,12 +1039,22 @@ function _contentFingerprint(s){
   for(let i=0;i<n;i+=step) h=Math.imul(h,31)+s.charCodeAt(i)>>>0;
   return h.toString(36);
 }
+// Sampled content hash for ArrayBuffers (Excel files) — byteLength alone let a
+// re-exported file of identical size be silently skipped on save (audit L-2).
+function _bufFingerprint(buf){
+  const b=new Uint8Array(buf);
+  const n=b.length;
+  let h=n>>>0;
+  const step=Math.max(1,Math.floor(n/200));
+  for(let i=0;i<n;i+=step) h=Math.imul(h,31)+b[i]>>>0;
+  return h.toString(36);
+}
 function _hashFileSet(filesOrProps, isInv){
   const _one = (files) => Object.entries(files||{})
     .map(([k,v])=>{
       if(!v) return k+':0';
       if(typeof v === 'string') return k+':s'+_contentFingerprint(v);
-      if(v instanceof ArrayBuffer) return k+':b'+v.byteLength;
+      if(v instanceof ArrayBuffer) return k+':b'+v.byteLength+'-'+_bufFingerprint(v);
       return k+':?';
     }).sort().join('|');
   if(!isInv) return _one(filesOrProps);
@@ -1208,7 +1219,6 @@ async function loadSave(key){
       vestmintFinancials:loadVestmintFinancialsForKey(key),
       vestmintOtherAssets:(data.vestmintOtherAssets||[]).map(a=>({...a, html:loadVestmintOtherAssetHtmlForKey(key,a.id)})),
       vestmintSections:data.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
-      vestmintHasProForma:data.vestmintHasProForma!==false,
       vestmintBpGreenway:data.vestmintBpGreenway||{enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''},
       vestmintBpBrentVillage:data.vestmintBpBrentVillage||{enabled:false,rentAtPurchase:'',rentCurrent:'',narrative:''},
       vmReportHTML:null,
@@ -1489,7 +1499,6 @@ function selectSource(src){
   state.vestmintFinancials = [];
   state.vestmintOtherAssets = [];
   state.vestmintSections = {fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true};
-  state.vestmintHasProForma = true;
   state.vestmintBpGreenway = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''};
   state.vestmintBpBrentVillage = {enabled:false,unitsCompleted:'',unitsRemaining:'',totalBudget:'',spentToDate:'',rentAtPurchase:'',rentCurrent:'',narrative:''};
   state.vmReportHTML = null;
@@ -1554,7 +1563,16 @@ function renderPortfolioSummary(){
   const totExpense=sum(m=>m.totalExpense);
   const totNoi=sum(m=>m.noi);
   const totUnits=sum(m=>m.unitCount);
-  const avgOcc=n?Math.round(sum(m=>m.occupancy)/n):0;
+  // Unit-weighted when unit counts are known; saves missing occupancy are
+  // excluded rather than counted as 0% dragging the average down (audit L-3).
+  const avgOcc=(()=>{
+    const withOcc=qSaves.map(s=>s.metrics).filter(m=>m&&m.occupancy!=null&&m.occupancy>0);
+    if(!withOcc.length) return 0;
+    const units=withOcc.reduce((a,m)=>a+(m.unitCount>0?m.unitCount:0),0);
+    if(units>0&&withOcc.every(m=>m.unitCount>0))
+      return Math.round(withOcc.reduce((a,m)=>a+m.occupancy*m.unitCount,0)/units);
+    return Math.round(withOcc.reduce((a,m)=>a+m.occupancy,0)/withOcc.length);
+  })();
   const totDelinq=sum(m=>m.delinquency);
   const totLeases=sum(m=>m.newLeases);
   const totRenewals=sum(m=>m.renewals);
@@ -1679,7 +1697,7 @@ function renderHome(){
         ${tabBtn('portfolio','📊 Portfolio Summary')}
       </div>
       <div style="display:flex;gap:8px;flex-shrink:0;padding-bottom:1px">
-        <button id="sync-btn" onclick="(async()=>{const b=document.getElementById('sync-btn');b.disabled=true;b.textContent='Syncing…';try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){b.disabled=false;b.textContent='↻ Sync';}})();"
+        <button id="sync-btn" onclick="(async()=>{const b=document.getElementById('sync-btn');b.disabled=true;b.textContent='Syncing…';try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){b.disabled=false;b.textContent='↻ Sync';showError('Sync failed: '+(e&&e.message||'check your connection and try again'));}})();"
           style="background:white;color:#2e7d6e;border:1.5px solid #c8e6de;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;white-space:nowrap"
           title="Re-sync reports from the cloud">↻ Sync</button>
         <button onclick="resetAll();state.showHome=false;_homeShowAll=false;render()"
@@ -2176,7 +2194,7 @@ const nextQtr = q => {
   const m = (q||"").match(/[Qq]\s*([1-4])[\s\/\-]*(\d{4})/);
   // When the quarter string is malformed or empty, return a graceful placeholder
   // rather than the literal "next quarter" which reads oddly in narrative text.
-  if(!m) return q ? "the coming quarter" : "the coming quarter";
+  if(!m) return "the coming quarter";
   const qNum = parseInt(m[1]);
   const yr = parseInt(m[2]);
   return qNum===4 ? `Q1 ${yr+1}` : `Q${qNum+1} ${yr}`;
@@ -2193,8 +2211,11 @@ const extractIncomeCats = incomeRows => {
   const cats=[];
   for(const r of (incomeRows||[])){
     const lbl=r.label.toLowerCase().replace(/\s+/g,' ');
-    // Stop once we hit the end of the income section
-    if(lbl==='total operating income'||lbl==='total income') break;
+    // Stop once we hit the end of the income section. Broadened beyond the two
+    // exact labels — a statement with e.g. "Total Revenue" or "Total Rental
+    // Income" as its income total previously let expense line items leak into
+    // incomeCategories (audit L-11; feeds only the Claude narrative context).
+    if(/^total\s+(operating\s+)?(income|revenue)$/.test(lbl)||/^total\s+rental\s+income$/.test(lbl)) break;
     // Skip totals, section headers, zero rows
     if(!r.isTotal && !r.isSectionHeader && Math.abs(r.amount||0)>0){
       cats.push({name:r.label.trim(), amount:r.amount||0});
@@ -2343,14 +2364,18 @@ function fixInvPropertyNameRefs(text, propertyMetrics){
   const props = propertyMetrics.filter(p => p.name && p.unitCount);
   const nouns = 'propert(?:y|ies)|asset(?:s)?|building(?:s)?|communit(?:y|ies)|development(?:s)?|project(?:s)?|complex(?:es)?';
 
+  // NOTE: all replacements use FUNCTION form (() => name) — a property name
+  // containing $&, $` or $1 would otherwise expand JS replacement patterns and
+  // silently corrupt the narrative (audit L-11; same fix as the edge function).
+
   // 1. "N-unit property/asset/etc." — exact unit count match
   for(const p of props){
     const n = p.unitCount;
     const pat = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\s+(?:${nouns})\\b`, 'gi');
-    result = result.replace(pat, p.name);
+    result = result.replace(pat, () => p.name);
     // Bare "the N-unit" before punctuation or end
     const pat2 = new RegExp(`\\b(?:the\\s+|a\\s+|an\\s+)?${n}[\\s\\-]unit\\b(?!\\s*-?\\s*(?:${nouns}))`, 'gi');
-    result = result.replace(pat2, p.name);
+    result = result.replace(pat2, () => p.name);
   }
 
   // 2. Two-property portfolio: replace collective and comparative references
@@ -2363,35 +2388,37 @@ function fixInvPropertyNameRefs(text, propertyMetrics){
     const lower   = (a.occupancy||0) <  (b.occupancy||0) ? a : b;
 
     // "both properties" / "both assets" / "the two properties"
-    result = result.replace(/\bboth\s+(?:propert(?:y|ies)|assets?|buildings?|communities|developments?|complexes?)\b/gi, andNames);
-    result = result.replace(/\bthe\s+two\s+(?:propert(?:y|ies)|assets?|buildings?|communities|developments?|complexes?)\b/gi, andNames);
-    result = result.replace(/\beach\s+(?:of\s+the\s+two\s+)?(?:propert(?:y|ies)|assets?|buildings?)\b/gi, `both ${andNames}`);
-    result = result.replace(/\bacross\s+both\b/gi, `across ${andNames}`);
-    result = result.replace(/\bat\s+both\s+(?:propert(?:y|ies)|assets?|locations?|sites?|communities)\b/gi, `at ${andNames}`);
+    result = result.replace(/\bboth\s+(?:propert(?:y|ies)|assets?|buildings?|communities|developments?|complexes?)\b/gi, () => andNames);
+    result = result.replace(/\bthe\s+two\s+(?:propert(?:y|ies)|assets?|buildings?|communities|developments?|complexes?)\b/gi, () => andNames);
+    result = result.replace(/\beach\s+(?:of\s+the\s+two\s+)?(?:propert(?:y|ies)|assets?|buildings?)\b/gi, () => `both ${andNames}`);
+    result = result.replace(/\bacross\s+both\b/gi, () => `across ${andNames}`);
+    result = result.replace(/\bat\s+both\s+(?:propert(?:y|ies)|assets?|locations?|sites?|communities)\b/gi, () => `at ${andNames}`);
 
     // "the larger / smaller property"
-    result = result.replace(/\bthe\s+larger\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, larger.name);
-    result = result.replace(/\bthe\s+smaller\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, smaller.name);
-    result = result.replace(/\bthe\s+larger\s+of\s+the\s+two\b/gi, larger.name);
-    result = result.replace(/\bthe\s+smaller\s+of\s+the\s+two\b/gi, smaller.name);
+    result = result.replace(/\bthe\s+larger\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, () => larger.name);
+    result = result.replace(/\bthe\s+smaller\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, () => smaller.name);
+    result = result.replace(/\bthe\s+larger\s+of\s+the\s+two\b/gi, () => larger.name);
+    result = result.replace(/\bthe\s+smaller\s+of\s+the\s+two\b/gi, () => smaller.name);
 
     // "the higher-occupancy / lower-occupancy property"
-    result = result.replace(/\bthe\s+higher[- ]occupancy\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, higher.name);
-    result = result.replace(/\bthe\s+lower[- ]occupancy\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, lower.name);
+    result = result.replace(/\bthe\s+higher[- ]occupancy\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, () => higher.name);
+    result = result.replace(/\bthe\s+lower[- ]occupancy\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, () => lower.name);
 
     // "Property 1" / "Property 2" / "the first property" / "the second property"
-    result = result.replace(/\bproperty\s+1\b/gi, a.name);
-    result = result.replace(/\bproperty\s+2\b/gi, b.name);
-    result = result.replace(/\bthe\s+first\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, a.name);
-    result = result.replace(/\bthe\s+second\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, b.name);
+    result = result.replace(/\bproperty\s+1\b/gi, () => a.name);
+    result = result.replace(/\bproperty\s+2\b/gi, () => b.name);
+    result = result.replace(/\bthe\s+first\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, () => a.name);
+    result = result.replace(/\bthe\s+second\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, () => b.name);
     // "the other property" → b.name, but only when b.name isn't already present
     // in the surrounding context (guards against double-substitution when Claude
     // says "...b.name..., while the other property..." and both should be b.name).
-    result = result.replace(/\bthe\s+other\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, match => {
-      // Find the sentence containing this match by searching backward for a period/newline
-      const idx = result.indexOf(match);
-      const sentenceStart = Math.max(0, result.lastIndexOf('.', idx - 1) + 1);
-      const sentenceEnd = Math.min(result.length, result.indexOf('.', idx) + 1) || result.length;
+    // Uses the replace callback's OFFSET argument for the sentence position —
+    // result.indexOf(match) returned the FIRST occurrence's position for every
+    // match, so repeated phrases were tested against the wrong sentence (audit L-11).
+    result = result.replace(/\bthe\s+other\s+(?:propert(?:y|ies)|asset|building|community)\b/gi, (match, offset) => {
+      const sentenceStart = Math.max(0, result.lastIndexOf('.', offset - 1) + 1);
+      const periodAfter = result.indexOf('.', offset);
+      const sentenceEnd = periodAfter === -1 ? result.length : periodAfter + 1;
       const sentence = result.slice(sentenceStart, sentenceEnd);
       // Only replace if b.name doesn't already appear in the same sentence
       return sentence.includes(b.name) ? match : b.name;
@@ -2403,10 +2430,11 @@ function fixInvPropertyNameRefs(text, propertyMetrics){
     const allNames = props.map(p=>p.name).slice(0,-1).join(', ') + ', and ' + props[props.length-1].name;
     const wordNums = ['','one','two','three','four','five','six','seven','eight','nine','ten'];
     const w = wordNums[props.length] || String(props.length);
-    result = result.replace(new RegExp(`\\ball\\s+(?:${w}|${props.length})\\s+(?:${nouns})\\b`,'gi'), allNames);
-    result = result.replace(new RegExp(`\\bthe\\s+(?:${w}|${props.length})\\s+(?:${nouns})\\b`,'gi'), allNames);
+    result = result.replace(new RegExp(`\\ball\\s+(?:${w}|${props.length})\\s+(?:${nouns})\\b`,'gi'), () => allNames);
+    result = result.replace(new RegExp(`\\bthe\\s+(?:${w}|${props.length})\\s+(?:${nouns})\\b`,'gi'), () => allNames);
     for(let i=0;i<props.length;i++){
-      result = result.replace(new RegExp(`\\bproperty\\s+${i+1}\\b`,'gi'), props[i].name);
+      const nm = props[i].name;
+      result = result.replace(new RegExp(`\\bproperty\\s+${i+1}\\b`,'gi'), () => nm);
     }
   }
 
@@ -2511,7 +2539,11 @@ async function rewriteWithClaude(kind){
               const qtxns=(metrics.remodels.topTransactions||[]).filter(t=>{
                 if(!t.date) return false; // exclude undated — can't confirm quarter
                 if(!qRange) return true;
-                const d=new Date(t.date);
+                // Parse "YYYY-MM-DD" component-wise: new Date(string) treats it as
+                // UTC midnight, which in US timezones is the prior LOCAL day — so
+                // transactions dated the 1st of the quarter were excluded (audit L-5).
+                const iso=String(t.date).match(/^(\d{4})-(\d{2})-(\d{2})/);
+                const d=iso?new Date(+iso[1],+iso[2]-1,+iso[3]):new Date(t.date);
                 return !isNaN(d.getTime()) && d>=qRange.start && d<=qRange.end;
               }).slice(0,8);
               if(!qtxns.length && !(metrics.remodels.remodelCount)) return null;
@@ -2818,7 +2850,7 @@ ${secOn.snapshot?`<div class="page">
   <div class="pgn">${pg.v()}</div>
 </div>`:""}
 ${(()=>{
-  const loan = assetFacts._loan || state.loan || {};
+  const loan = state.loan || {};  // assetFacts._loan was read here but never written anywhere (audit L-10)
   const hasPrincipal = secOn.loanPrincipal && (loan.principalInception || loan.principalCurrent);
   const hasWriteoffs  = secOn.writeoffs     && loan.writeoffs;
   if(!hasPrincipal && !hasWriteoffs) return "";
@@ -3611,14 +3643,24 @@ function _parseAppFolioRenewalCount(renewalText){
     || renewalText.match(/Total\s+Offers[:\s]+(\d+)/i)
     || renewalText.match(/(\d+)\s+Total\s+Offers/i);
   if(totalMatch) return parseInt(totalMatch[1])||0;
-  // Fallback 1: rows with Status = "Renewed"
+  // Fallback 1: rows with Status = "Renewed" — anchored so "Not Renewed"
+  // (a declined offer) is never counted as a renewal (audit L-4).
   const renewalRows=parseDelim(renewalText);
-  const renewedCount=renewalRows.filter(r=>/renewed/i.test(r["Status"]||"")).length;
+  const renewedCount=renewalRows.filter(r=>{
+    const s=String(r["Status"]||"").trim();
+    return /renewed/i.test(s) && !/\bnot\s+renewed\b/i.test(s);
+  }).length;
   if(renewedCount>0) return renewedCount;
-  // Fallback 2: numeric Count/Renewals/Offers column
+  // Fallback 2: numeric Count/Renewals/Offers column. Skip grand-total rows —
+  // a table with per-unit-type rows PLUS a Total row would otherwise count
+  // everything twice (audit L-4).
   let total=0;
   const colNames=["Count","Renewals","Offers","# Renewals","Total"];
-  renewalRows.forEach(r=>{for(const col of colNames){const v=parseInt(r[col]||"");if(!isNaN(v)&&v>0){total+=v;break;}}});
+  renewalRows.forEach(r=>{
+    const firstCell=String(Object.values(r)[0]||"").trim();
+    if(/^(grand\s+)?total\b/i.test(firstCell)) return;
+    for(const col of colNames){const v=parseInt(r[col]||"");if(!isNaN(v)&&v>0){total+=v;break;}}
+  });
   return total;
 }
 
@@ -3735,7 +3777,6 @@ function parsePropertyMetrics(prop){
 // section when the map is empty but invMetrics already exist.
 function _buildUnitCurrentRents(){
   const map={};
-  const fileKeys=Object.keys(_dbCache).filter(k=>k.startsWith('lw_files_'));
   for(const prop of (state.invProperties||[])){
     let rr3Text=(prop.files&&prop.files.rr3)||null;
     if(!rr3Text && prop._imported && prop._importedFrom){
@@ -3757,7 +3798,7 @@ function _buildUnitCurrentRents(){
           if(normU&&rv>0) map[normU]=rv;
         }
       });
-    }catch(e){ console.warn('[QRB] collectUnitCurrentRents: skipped a rent-roll row due to parse error', e); }
+    }catch(e){ console.warn('[QRB] _buildUnitCurrentRents: skipped a rent-roll row due to parse error', e); }
   }
   return map;
 }
@@ -4222,7 +4263,7 @@ ${(()=>{
     <div class="sc hl"><div class="sl">Total Expenses</div><div class="sv">${fmtWhole(m.totalExpense)}</div></div>
     <div class="sc hl"><div class="sl">Net Operating Income</div><div class="sv">${fmtWhole(m.noi)}</div></div>
     <div class="sc"><div class="sl">Avg Physical Occupancy (Weighted)</div><div class="sv">${m.occupancy}%</div></div>
-    <div class="sc"><div class="sl">Avg Economic Occupancy (Weighted)</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
+    <div class="sc"><div class="sl">Avg Economic Occupancy</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
     <div class="sc"><div class="sl">Total Units</div><div class="sv">${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</div></div>
   </div>
   ${(()=>{
@@ -4936,7 +4977,7 @@ ${summaryOverflow&&(n.capex||n.outlook)?`<div class="page">
     <div class="sc hl"><div class="sl">Total Expenses</div><div class="sv">${fmtWhole(m.totalExpense)}</div></div>
     <div class="sc hl"><div class="sl">Net Operating Income</div><div class="sv">${fmtWhole(m.noi)}</div></div>
     <div class="sc"><div class="sl">Avg Physical Occupancy (Weighted)</div><div class="sv">${m.occupancy}%</div></div>
-    <div class="sc"><div class="sl">Avg Economic Occupancy (Weighted)</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
+    <div class="sc"><div class="sl">Avg Economic Occupancy</div><div class="sv">${m.avgEconOcc?m.avgEconOcc+"%":"—"}</div></div>
     <div class="sc"><div class="sl">Total Units</div><div class="sv">${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</div></div>
   </div>
   ${m.propertyMetrics&&m.propertyMetrics.length>0?`
@@ -5900,7 +5941,7 @@ function renderVestmintStep2(){
                 :`<div style="font-size:12px;color:#9ca3af;margin-bottom:8px">No photo uploaded</div>`}
               <div style="display:flex;gap:8px">
                 <button onclick="uploadVestmintFundPhoto('${key}')" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">📷 ${photo?"Replace":"Upload"}</button>
-                ${photo?`<button onclick="dbSet(photoStorageKey('${key}'),null);_refreshVestmintReportHTML();render()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Remove</button>`:""}
+                ${photo?`<button onclick="dbRemove(photoStorageKey('${key}'));_refreshVestmintReportHTML();render()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Remove</button>`:""}
               </div>
             </div>`;
           return photoCard("Liquid Lending Solutions",VM_LLS_PHOTO_KEY,llsPhoto)+photoCard("Real Freedom Fund",VM_RFF_PHOTO_KEY,rffPhoto)+photoCard("Doral Apartments",VM_DORAL_PHOTO_KEY,doralPhoto);
@@ -6362,14 +6403,16 @@ function loadAllBuildiumFiles(){
       // term overlaps, but ordering is a cheap safeguard against future renames.
       if(has(base,"balance sheet"))
         {assigned.balanceSheet={file:f,asBuffer:true};return;}
+      // Capex must be checked BEFORE income (audit L-6): capex terms are more
+      // specific, and a capex export named e.g. "Transaction Detail 12 Month.xlsx"
+      // would otherwise match the income statement's "12 month" term and steal
+      // the income slot, pushing the real income file to unmatched.
+      if(has(base,"capex detail","capex_detail","capex","transaction detail by account","transaction_detail_by_account"))
+        {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
       if(has(base,"income statement","profit and loss","profit loss","p&l","cash flow","t12","trailing 12","12 month","12month","operating statement"))
         {assigned.income={file:f,asBuffer:isExcel};return;}
       if(has(base,"rent roll"))
         {rrFiles.push(f);return;}
-      // Capex Detail is emitted by Buildium as "Transaction Detail by Account"
-      // for capital accounts, sometimes downloaded with "capex" in the name.
-      if(has(base,"capex detail","capex_detail","capex","transaction detail by account","transaction_detail_by_account"))
-        {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
       // Buildium Rent Engine / community performance export — must come BEFORE the
       // generic "leasing" check because Buildium names this file
       // "Leasing Data - Property Performance - ..." which contains "leasing".
@@ -7921,7 +7964,7 @@ function render(){
             <h2 style="font-size:18px;font-weight:700;margin-bottom:4px">Select Data Source</h2>
             <p style="font-size:13px;color:#5a8070">Choose which property management platform your reports are exported from.</p>
           </div>
-          <button id="step-sync-btn" onclick="(async()=>{const b=document.getElementById('step-sync-btn');if(b){b.disabled=true;b.textContent='Syncing…';}try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){const b2=document.getElementById('step-sync-btn');if(b2){b2.disabled=false;b2.textContent='↻ Sync Reports';}}})();" style="font-size:12px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1.5px solid #c8e6de;border-radius:6px;padding:7px 14px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif" title="Re-sync your saved reports from the cloud">↻ Sync Reports</button>
+          <button id="step-sync-btn" onclick="(async()=>{const b=document.getElementById('step-sync-btn');if(b){b.disabled=true;b.textContent='Syncing…';}try{await supaBootstrap();state.showHome=getSavesIndex().length>0;render();}catch(e){const b2=document.getElementById('step-sync-btn');if(b2){b2.disabled=false;b2.textContent='↻ Sync Reports';}showError('Sync failed: '+(e&&e.message||'check your connection and try again'));}})();" style="font-size:12px;font-weight:600;color:#2e7d6e;background:#e6f9f4;border:1.5px solid #c8e6de;border-radius:6px;padding:7px 14px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:Inter,sans-serif" title="Re-sync your saved reports from the cloud">↻ Sync Reports</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;grid-auto-rows:auto">
           <div class="home-card" style="flex-direction:column;align-items:flex-start;gap:10px;cursor:pointer;padding:20px 20px 16px" onclick="selectSource('buildium')">
@@ -8511,7 +8554,7 @@ async function _bootAfterAuth(user){
         console.log(`[QRB] First-load retry attempt ${attempt+1}`);
         await supaBootstrap();
         state.showHome = getSavesIndex().length > 0;
-        try{render();}catch(e){}
+        try{render();}catch(e){console.error('[QRB] render() threw during first-load retry:',e);}
         if(getSavesIndex().length > 0) return; // success
       }catch(e){ console.warn(`[QRB] First-load retry ${attempt+1} failed:`,e); }
       attempt++;
@@ -8668,7 +8711,7 @@ sb.auth.onAuthStateChange((event, session)=>{
         if(state.showHome){
           state.showHome = getSavesIndex().length > 0;
           if(!overlay || overlay.style.display === 'none'){
-            try{render();}catch(e){}
+            try{render();}catch(e){console.error('[QRB] render() threw after token-refresh re-bootstrap:',e);}
           }
         }
       }catch(e){ console.warn('[QRB] Re-bootstrap after',event,'failed:',e); }
