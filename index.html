@@ -2891,10 +2891,22 @@ ${secOn.financialCharts?`<div class="page">
 ${secOn.leasing?`<div class="page">
   <div class="pn">${prop}</div><div class="sh">Leasing — ${qtr}</div>
   <div class="lg">
-    ${m.newLeases?`<div class="lc"><div class="ll">New Leases</div><div class="lv">${m.newLeases}</div></div>`:""}
-    ${m.renewals?`<div class="lc"><div class="ll">Renewals</div><div class="lv">${m.renewals}</div></div>`:""}
-    ${m.inquiries?`<div class="lc"><div class="ll">Inquiries</div><div class="lv">${m.inquiries}</div></div>`:""}
-    ${m.applications?`<div class="lc"><div class="ll">Applications</div><div class="lv">${m.applications}</div></div>`:""}
+    ${(()=>{
+      // A real ZERO is reportable data — "0 renewals this quarter" tells the
+      // investor something; a missing tile reads as an omission. Show the tile
+      // when the value is nonzero OR the source file that measures it was
+      // uploaded (so a report with no leasing/renewal file still hides the tile
+      // rather than asserting a false zero). Mirrors the delinquencyKnown
+      // pattern; the investment/VestMint pages already show 0s unconditionally.
+      const leasingKnown=!!(state.files.leasingSummary||state.files.leasing||state.files.rentEngine);
+      const renewalsKnown=!!(state.files.renewalSummary||state.files.rentEngine||(state.source==='buildium'&&state.files.leasing));
+      return[
+        (m.newLeases||leasingKnown)?`<div class="lc"><div class="ll">New Leases</div><div class="lv">${m.newLeases||0}</div></div>`:"",
+        (m.renewals||renewalsKnown)?`<div class="lc"><div class="ll">Renewals</div><div class="lv">${m.renewals||0}</div></div>`:"",
+        (m.inquiries||leasingKnown)?`<div class="lc"><div class="ll">Inquiries</div><div class="lv">${m.inquiries||0}</div></div>`:"",
+        (m.applications||leasingKnown)?`<div class="lc"><div class="ll">Applications</div><div class="lv">${m.applications||0}</div></div>`:""
+      ].join("\n    ");
+    })()}
     ${state.source==='buildium'?"":`
     ${m.lossToLease?`<div class="lc"><div class="ll">Loss to Lease</div><div class="lv">${fmtWhole(m.lossToLease)}</div></div>`:""}
     ${(m.delinquency||m.delinquencyKnown)?`<div class="lc"><div class="ll">Delinquency</div><div class="lv">${fmtWhole(m.delinquency)}</div></div>`:""}
@@ -3721,8 +3733,9 @@ function parsePropertyMetrics(prop){
     if(!prop.files.leasingSummary && !prop.files.leasing) showError("Warning: No leasing file uploaded for \""+prop.name+"\" (AppFolio) — new leases, renewals, inquiries, and applications will show as 0.");
     const lr=parseDelim(prop.files.leasingSummary||prop.files.leasing||"");
     const lt=lr.find(r=>/^total/i.test(r["Unit Type"]||""));
-    if(lt){newLeases=parseInt(lt["Leased"]||0)||0;inquiries=parseInt(lt["Inquiries Received"]||0)||0;applications=parseInt(lt["Applications Received"]||0)||0;}
-    else{lr.forEach(r=>{newLeases+=parseInt(r["Leased"]||0)||0;inquiries+=parseInt(r["Inquiries Received"]||0)||0;applications+=parseInt(r["Applications Received"]||0)||0;});}
+    // "Inquiries Received" renamed to "Interests Received" by AppFolio mid-2026 — accept both.
+    if(lt){newLeases=parseInt(lt["Leased"]||0)||0;inquiries=parseInt(lt["Inquiries Received"]||lt["Interests Received"]||0)||0;applications=parseInt(lt["Applications Received"]||0)||0;}
+    else{lr.forEach(r=>{newLeases+=parseInt(r["Leased"]||0)||0;inquiries+=parseInt(r["Inquiries Received"]||r["Interests Received"]||0)||0;applications+=parseInt(r["Applications Received"]||0)||0;});}
     renewals=_parseAppFolioRenewalCount(prop.files.renewalSummary||"");
   } else {
     occ1=calcOcc(prop.files.rr1,"rr1"); occ2=calcOcc(prop.files.rr2,"rr2"); occ3=calcOcc(prop.files.rr3,"rr3");
@@ -5670,18 +5683,21 @@ function processDataAppFolio() {
     // ── Leasing Summary ──────────────────────────────────────────────────────
     // Columns: Unit Type, # of Units, # of Model Units, Inquiries Received,
     //          Showings Completed, Applications Received, Move Ins, Move Outs, Leased
+    // Mid-2026 AppFolio renamed "Inquiries Received" → "Interests Received" in the
+    // Leasing Summary export — accept both (same fix in parsePropertyMetrics).
     let newLeases=0, inquiries=0, applications=0;
     const leasingRows = parseDelim(state.files.leasingSummary||state.files.leasing||"");
+    const _inq = r => parseInt(r["Inquiries Received"]||r["Interests Received"]||0)||0;
     const leasingTotal = leasingRows.find(r => /^total/i.test(r["Unit Type"]||""));
     if (leasingTotal) {
       newLeases    = parseInt(leasingTotal["Leased"]||0)||0;
-      inquiries    = parseInt(leasingTotal["Inquiries Received"]||0)||0;
+      inquiries    = _inq(leasingTotal);
       applications = parseInt(leasingTotal["Applications Received"]||0)||0;
     } else {
       // Fallback: sum all non-header rows
       leasingRows.forEach(r => {
         newLeases    += parseInt(r["Leased"]||0)||0;
-        inquiries    += parseInt(r["Inquiries Received"]||0)||0;
+        inquiries    += _inq(r);
         applications += parseInt(r["Applications Received"]||0)||0;
       });
     }
