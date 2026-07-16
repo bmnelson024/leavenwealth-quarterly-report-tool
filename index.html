@@ -3714,7 +3714,7 @@ function parsePropertyMetrics(prop){
   if(prop.source==='appfolio'){
     occ1=calcOccAppFolio(prop.files.rr1); occ2=calcOccAppFolio(prop.files.rr2); occ3=calcOccAppFolio(prop.files.rr3);
     const fr=parseDelim(prop.files.rr3||"").filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u);});
-    fr.forEach(r=>{if(!getVacantFlag(r)){mkt+=parseCur(r["Market Rent"]||r["MarketRent"]||r["Mkt Rent"]||0);act+=parseCur(r["Rent"]||0);}});
+    fr.forEach(r=>{if(!getVacantFlag(r)){mkt+=parseCur(r["Market Rent"]||r["MarketRent"]||r["Mkt Rent"]||r["Computed Market Rent"]||0);act+=parseCur(r["Rent"]||0);}});
     const dr=parseDelim(prop.files.delinquency||"");
     const dt=dr.find(r=>/^total$/i.test((r["Unit"]||r["Name"]||"").trim()));
     if(dt){delinquency=parseCur(dt["Amount Receivable"]||0);}else{dr.forEach(r=>{const a=parseCur(r["Amount Receivable"]||0);if(a>0)delinquency+=a;});}
@@ -3727,7 +3727,7 @@ function parsePropertyMetrics(prop){
   } else {
     occ1=calcOcc(prop.files.rr1,"rr1"); occ2=calcOcc(prop.files.rr2,"rr2"); occ3=calcOcc(prop.files.rr3,"rr3");
     const fr=parseDelim(skipMetaRows(prop.files.rr3||"")).filter(isBuildiumUnitRow);
-    fr.forEach(r=>{if(!getVacantFlag(r)){mkt+=parseCur(r["MarketRent"]||r["Market Rent"]||0);act+=parseCur(r["Rent"]||0);}});
+    fr.forEach(r=>{if(!getVacantFlag(r)){mkt+=parseCur(r["MarketRent"]||r["Market Rent"]||r["Computed Market Rent"]||0);act+=parseCur(r["Rent"]||0);}});
     if(!prop.files.delinquency) showError("Warning: Delinquency file missing for \""+prop.name+"\" — delinquency will show $0.");
     delinquency=parseBuildiumDelinquency(prop.files.delinquency||"");
     const lr=parseDelim(prop.files.leasing||"");
@@ -5631,7 +5631,7 @@ function processDataAppFolio() {
     finalRows.forEach(r => {
       const status = (r["Status"]||"").toUpperCase();
       if (!status.includes("VACANT")) {
-        mkt += parseCur(r["Market Rent"]||r["MarketRent"]||r["Mkt Rent"]||0);  // FIX: handle camelCase export variant
+        mkt += parseCur(r["Market Rent"]||r["MarketRent"]||r["Mkt Rent"]||r["Computed Market Rent"]||0);  // FIX: handle camelCase + AppFolio "Computed Market Rent" (amenity-pricing exports)
         act += parseCur(r["Rent"]||0);
       }
     });
@@ -5641,7 +5641,7 @@ function processDataAppFolio() {
       {label:"Bed/Bath",   pat:/^bd\/ba$/i},
       {label:"Lease From", pat:/^lease\s*from$/i},
       {label:"Lease To",   pat:/^lease\s*to$/i},
-      {label:"Market Rent", pat:/^market\s*rent$/i},
+      {label:"Market Rent", pat:/^(computed\s+)?market\s*rent$/i},
       {label:"Rent",       pat:/^rent$/i},
     ];
     const rrAllHeaders = Object.keys(finalRows[0]||{});
@@ -5787,7 +5787,7 @@ function processBuildium() {
     let mkt=0,act=0;
     finalRows.forEach(r=>{
       if(!getVacantFlag(r)){
-        mkt+=parseCur(r["MarketRent"]||r["Market Rent"]||0);
+        mkt+=parseCur(r["MarketRent"]||r["Market Rent"]||r["Computed Market Rent"]||0);
         act+=parseCur(r["Rent"]||0);
       }
     });
@@ -5796,7 +5796,7 @@ function processBuildium() {
       {label:"Bed/Bath",    pat:/^(bedbath|bed.?bath|beds?.?baths?|br.?ba|bd.?ba|bd.?bath|floorplan|floor\s*plan|unit\s*type|type)$/i},
       {label:"Lease Start", pat:/^(leasestartraw|lease\s*start|leasestart|start\s*date|move.?in\s*date?)$/i},
       {label:"Lease End",   pat:/^(leaseendraw|lease\s*end|leaseend|end\s*date|move.?out\s*date?|lease\s*expir)$/i},
-      {label:"Market Rent",  pat:/^(marketrent|market\s*rent|mkt\s*rent)$/i},
+      {label:"Market Rent",  pat:/^(marketrent|market\s*rent|mkt\s*rent|computed\s*market\s*rent)$/i},
       {label:"Rent",        pat:/^(rent|current\s*rent|actual\s*rent|lease\s*rent)$/i},
       {label:"Total",       pat:/^(total|total\s*charges|totalcharges|total\s*rent)$/i},
     ];
