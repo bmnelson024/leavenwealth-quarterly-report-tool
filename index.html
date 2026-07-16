@@ -8114,7 +8114,7 @@ function render(){
     const econBox = `
       <div class="section-label" style="margin-top:12px">Economic Occupancy</div>
       <div class="econ-box">
-        <div style="font-size:12px;color:#5a8070">Enter economic occupancy % for each month (e.g. 87 for 87%)</div>
+        <div style="font-size:12px;color:#5a8070">Enter economic occupancy % for each month (e.g. 87 for 87%). Leave a month <strong>blank</strong> to exclude it from the average (e.g. a partial month before acquisition) — a typed 0 counts as a real zero.</div>
         <div class="econ-grid">
           ${["m1","m2","m3"].map((k,i)=>`
             <div>
@@ -8371,11 +8371,18 @@ function render(){
   scheduleAutoSave();
 }
 // Shared helper — returns "87" or null. Used by calcEconAvg and by report builders.
+// Average over the months that HAVE a value. A month left blank is excluded —
+// e.g. an inception quarter where the property was acquired mid-quarter and a
+// partial month's ~0% would misstate performance. An explicitly typed "0"
+// counts: a real zero in a fully-owned month is real data. Previously ALL
+// three months were required or no average was shown at all.
 function _econAvgStr(eo){
   if(!eo) return null;
-  const {m1,m2,m3}=eo;
-  if(m1&&m2&&m3) return Math.round((parseFloat(m1)+parseFloat(m2)+parseFloat(m3))/3).toString();
-  return null;
+  const vals=[eo.m1,eo.m2,eo.m3]
+    .filter(v=>v!==""&&v!=null&&!isNaN(parseFloat(v)))
+    .map(v=>parseFloat(v));
+  if(!vals.length) return null;
+  return Math.round(vals.reduce((s,v)=>s+v,0)/vals.length).toString();
 }
 function calcEconAvg(){
   const s=_econAvgStr(state.econOcc);
