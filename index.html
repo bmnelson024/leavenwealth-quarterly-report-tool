@@ -4354,6 +4354,11 @@ ${(()=>{
     <div class="sc"><div class="sl">Total Units</div><div class="sv">${m.totalUnits||(m.propertyMetrics?m.propertyMetrics.reduce((s,p)=>s+(p.unitCount||0),0):0)||"—"}</div></div>
   </div>
   ${_monthlyOccTableHTML(m)}
+  ${m.propertyMetrics&&m.propertyMetrics.length>0?`
+  <div class="sh2">By Property</div>
+  <table class="st"><thead><tr><th>Property</th><th>Units</th><th>Occupancy</th><th>Income</th><th>Expenses</th><th>NOI</th></tr></thead><tbody>
+    ${m.propertyMetrics.map(p=>`<tr><td>${escapeHtml(p.name||"—")}</td><td>${p.unitCount||"—"}</td><td>${p.occupancy}%</td><td>${fmtWhole(p.totalIncome)}</td><td>${fmtWhole(p.totalExpense)}</td><td>${fmtWhole(p.noi)}</td></tr>`).join("")}
+  </tbody></table>`:""}
   ${(()=>{
     const hasPrincipal=sec.loanPrincipal&&(loan.principalInception||loan.principalCurrent);
     const hasWriteoffs=sec.writeoffs&&loan.writeoffs;
