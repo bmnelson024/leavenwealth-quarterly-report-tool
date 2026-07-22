@@ -3330,7 +3330,7 @@ function uploadBpCapex(){
         // Normalise AppFolio result
         const items=(parsed.capexItems||[]).map(i=>({name:i.name||i.label||"",amount:i.total||i.amount||0})).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
         const remodels=parsed.remodelUnits||[];
-        parsed={totalCapex:parsed.totalCapex, items, remodels:remodels.length?remodels:null, remodelsCount:remodels.length, totalAllCapex:parsed.totalCapex, unitSplit:parsed.unitSplit||null};
+        parsed={totalCapex:parsed.totalCapex, items, remodels:remodels.length?remodels:null, remodelsCount:remodels.length, totalAllCapex:parsed.totalCapex, unitSplit:parsed.unitSplit||null, remodelSpend:parsed.remodelSpend||0};
       } else {
         // Try Business Plan-specific Buildium parser
         parsed=null;
@@ -3342,7 +3342,10 @@ function uploadBpCapex(){
         return;
       }
       const items=(parsed.items||[]).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
-      state.businessPlan.spentToDate=String(Math.round(parsed.totalCapex));
+      // "Amount Spent to Date" draws down the REMODEL budget, so only remodel-
+      // account spend counts when the parser can identify it (AppFolio GL path).
+      // Buildium files keep the historical all-capital-improvements behavior.
+      state.businessPlan.spentToDate=String(Math.round(parsed.remodelSpend>0?parsed.remodelSpend:parsed.totalCapex));
       const rc=parsed.remodelsCount||0;
       if(rc>0){
         state.businessPlan.unitsCompleted=String(rc);
@@ -7457,7 +7460,7 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
     // unit is UNIT-LEVEL spend; one with no unit is PROPERTY/COMMON spend
     // (building electrical, pavement, roofs...). Only possible when the export
     // has a Unit column.
-    let unitSpend=0, commonSpend=0;
+    let unitSpend=0, commonSpend=0, remodelSpend=0;
     const commonAccountMap = new Map(); // account → net for unit-blank rows
 
     for(let i=headerRowIdx+1; i<rows.length; i++) {
@@ -7519,10 +7522,14 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
       accountMap.set(acctName, (accountMap.get(acctName)||0) + net);
 
       const unitVal = String(colUnit>=0&&row[colUnit]!=null ? row[colUnit] : "").trim();
-      // Remodel-unit tracking: distinct units charged under a "Capex Remodel"-
-      // style account, with summed cost — powers Units Completed + per-unit ROI.
-      if(/remodel/i.test(acctRaw) && unitVal){
-        remodelUnitMap.set(unitVal, (remodelUnitMap.get(unitVal)||0) + net);
+      // Remodel-account spend: EVERYTHING in Capex Remodel accounts, unit-coded
+      // or not (bulk remodel materials count) — this is what draws down the
+      // remodel budget ("Amount Spent to Date"), per Brian Jul 2026.
+      if(/remodel/i.test(acctRaw)){
+        remodelSpend += net;
+        // Remodel-unit tracking: distinct units with summed cost — powers
+        // Units Completed + per-unit ROI.
+        if(unitVal) remodelUnitMap.set(unitVal, (remodelUnitMap.get(unitVal)||0) + net);
       }
       // Unit vs property attribution
       if(colUnit>=0){
@@ -7577,7 +7584,7 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
         .sort((a,b) => b[1]-a[1])
         .map(([name, amount]) => ({name, amount}))
     } : null;
-    return {capexItems, totalCapex, remodelUnits, unitSplit};
+    return {capexItems, totalCapex, remodelUnits, unitSplit, remodelSpend:Math.round(remodelSpend)};
   } catch(e) {
     console.warn('parseAFCapexGL failed:', e);
     return null;
