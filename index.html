@@ -90,6 +90,8 @@
   .home-prop { font-weight: 700; font-size: 14px; color: #1a3a35; }
   .home-meta { font-size: 12px; color: #5a8070; margin-top: 3px; }
   .home-resume-btn { background: #1a3a35; color: white; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; white-space: nowrap; }
+  .home-next-btn { background: #e6f9f4; color: #1a3a35; padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; border: 1px solid #c8e6de; cursor: pointer; white-space: nowrap; }
+  .home-next-btn:hover { background: #d3f2e9; }
   .home-delete-btn { background: white; color: #dc2626; border: 1px solid #fca5a5; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
   .save-btn { background: #e6f9f4; color: #2e7d6e; border: 1px solid #c8e6de; padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
   .save-btn:hover { background: #c8e6de; }
@@ -1718,6 +1720,7 @@ function renderHome(){
           </div>
           <div style="display:flex;gap:8px;flex-shrink:0">
             <button class="home-delete-btn" onclick="deleteSave('${attrJs(s.key)}')">Delete</button>
+            <button class="home-next-btn" title="Start the next quarter's report for this property — this save stays untouched" onclick="startNextQuarterFromSave('${attrJs(s.key)}')">+ Next Qtr</button>
             <button class="home-resume-btn" onclick="loadSave('${attrJs(s.key)}')">Resume →</button>
           </div>
         </div>`;
@@ -4048,16 +4051,13 @@ function genBpNarrative(){
     progressSentence=`As of ${q}, ${comp} unit${comp!==1?"s have":" has"} been remodeled at ${inv}.`;
   }
 
-  // Budget sentence
+  // Budget sentence — facts only. The spend-vs-completion alignment commentary
+  // was removed on request: it editorialized in an investor-facing report
+  // ("running 15pp ahead of unit completion"); Brian addresses pacing in the
+  // summary narrative himself when it warrants discussion.
   let budgetSentence="";
   if(spent>0&&budget>0){
-    const delta=budgetPct-unitsPct;
-    const alignment=Math.abs(delta)<=5
-      ?"tracking closely with unit completion"
-      :delta>5
-        ?`running ${delta} percentage points ahead of unit completion`
-        :`running ${Math.abs(delta)} percentage points behind unit completion`;
-    budgetSentence=` Total renovation spend stands at $${spent.toLocaleString()} (${budgetPct}% of the $${budget.toLocaleString()} budget), ${alignment}.${remaining>0?` Approximately $${remaining.toLocaleString()} remains available for the ${rem} unit${rem!==1?"s":""} still to be renovated.`:""}`;
+    budgetSentence=` Total renovation spend stands at $${spent.toLocaleString()} (${budgetPct}% of the $${budget.toLocaleString()} budget).${remaining>0?` Approximately $${remaining.toLocaleString()} remains available for the ${rem} unit${rem!==1?"s":""} still to be renovated.`:""}`;
   } else if(spent>0){
     budgetSentence=` Total renovation spend to date is $${spent.toLocaleString()}.`;
   }
@@ -4140,7 +4140,8 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   const loanInceptionDate=escapeHtml(loan.principalInceptionDate||("12/31/"+(prevYrNum||"")));
   const writeoffs=loan.writeoffs?fmtLoan0(loan.writeoffs):"—";
   const prev=state.invPrevMetrics;
-  const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(2)+"%":"—";
+  // Whole-number percentages — matches the single-property report's pct() (.toFixed(0)).
+  const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(0)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
   const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
   const _propNamesArr=[...state.invProperties.map(p=>p.name).filter(Boolean),
@@ -4426,13 +4427,9 @@ ${sec.businessPlan && bp.enabled ? `
           </div>
         </div>
       </div>
-      ${delta!==null?`<div style="font-size:10px;color:${Math.abs(delta)<=5?'#166534':delta>5?'#92400e':'#1e40af'};background:${Math.abs(delta)<=5?'#f0fdf4':delta>5?'#fffbeb':'#eff6ff'};border-radius:6px;padding:7px 12px;margin-bottom:14px;text-align:center;">
-        ${Math.abs(delta)<=5
-          ? `Budget spend and unit completion are well aligned (${pct}% spent / ${unitsPct}% complete)`
-          : delta>5
-            ? `Spending is running ${delta}pp ahead of unit completion (${pct}% spent / ${unitsPct}% complete)`
-            : `Unit completion is running ${Math.abs(delta)}pp ahead of spend (${unitsPct}% complete / ${pct}% spent)`}
-      </div>`:''}`:budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Budget utilization</span><span>${pct}%</span></div>
+      ${""/* Spend-vs-completion alignment banner removed (investor report — pacing
+            commentary belongs in the summary narrative, not a colored callout;
+            the neutral %-spent / %-complete boxes above remain). */}`:budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)"><span>Budget utilization</span><span>${pct}%</span></div>
       <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
       </div>`:""}
@@ -4743,7 +4740,7 @@ function buildVmBpPage(bp, label, qtr, inv, pg, scopeNote=''){
       </div>
     </div>
   </div>
-  ${delta!==null?`<div style="font-size:10px;color:${Math.abs(delta)<=5?'#166534':delta>5?'#92400e':'#1e40af'};background:${Math.abs(delta)<=5?'#f0fdf4':delta>5?'#fffbeb':'#eff6ff'};border-radius:6px;padding:7px 12px;margin-bottom:14px;text-align:center;font-family:sans-serif;">${Math.abs(delta)<=5?`Budget spend and unit completion are well aligned (${budgetPct}% spent / ${unitsPct}% complete)`:delta>5?`Spending is running ${delta}pp ahead of unit completion (${budgetPct}% spent / ${unitsPct}% complete)`:`Unit completion is running ${Math.abs(delta)}pp ahead of spend (${unitsPct}% complete / ${budgetPct}% spent)`}</div>`:''}`:budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-family:sans-serif"><span>Budget utilization</span><span>${budgetPct}%</span></div>
+  ${""/* Spend-vs-completion alignment banner removed here too (see investment BP page). */}`:budget>0?`<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-family:sans-serif"><span>Budget utilization</span><span>${budgetPct}%</span></div>
   <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
     <div style="height:100%;width:${budgetPct}%;background:var(--teal);border-radius:5px;"></div>
   </div>`:""}
@@ -4791,7 +4788,8 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const qtr=escapeHtml(quarter||"");
   const prev=state.invPrevMetrics;
   const pg={n:1,v(){return ++this.n;}};
-  const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(1)+"%":"—";
+  // Whole-number percentages — matches the single-property and investment reports.
+  const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(0)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
   const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
   // Property photos for cover
@@ -8485,6 +8483,41 @@ function calcNextQuarterLabel(quarter){
 // pre-fills the next quarter label, and re-fires the property-scoped auto-loads
 // (photo, asset facts, prior-quarter occupancy; the investment Business Plan
 // carry-forward fires from its render hook).
+// Home-card entry point: start the NEXT quarter directly from a saved report
+// without resuming it first (previously the only button lived inside an open
+// report, forcing a resume + navigate just to start the new quarter).
+function startNextQuarterFromSave(key){
+  let d=null;
+  try{ d=JSON.parse(dbGet(SAVE_PREFIX+key)||"null"); }catch(e){}
+  if(!d){ showError("Could not read that save."); return; }
+  const src=d.source||null;
+  const isInv=src==='investment'||src==='vestmint';
+  const name=isInv?(d.investmentName||""):(d.propertyName||"");
+  const nextQ=calcNextQuarterLabel(d.currentQuarter||"");
+  if(!src||!name||!nextQ){ showError("Can't start the next quarter from this save — it's missing a source, name, or a recognizable quarter."); return; }
+  // If the next quarter's report already exists (e.g. clicked on an older save),
+  // offer to open it rather than silently starting a duplicate blank one.
+  const existingKey=saveKey(name,nextQ);
+  if(dbGet(SAVE_PREFIX+existingKey)){
+    if(confirm(`A ${nextQ} report for ${name} already exists. Open it instead?`)) loadSave(existingKey);
+    return;
+  }
+  if(!confirm(`Start ${nextQ} for ${name}?\n\nThe ${d.currentQuarter||"current"} report stays saved. A new ${nextQ} report will open with prior-quarter data carried over automatically.`)) return;
+  selectSource(src);
+  if(isInv) state.investmentName=name; else state.propertyName=name;
+  state.currentQuarter=nextQ;
+  state.showHome=false;
+  state.step=0;
+  if(!isInv){
+    const savedPhoto=loadPhotoForProperty(name);
+    if(savedPhoto){ state.propertyPhoto=savedPhoto; state.photoAutoLoaded=true; }
+    const facts=loadAssetFactsForProperty(name);
+    if(facts) state.assetFacts=facts;
+    tryAutoLoadPriorOccupancy();
+  }
+  render();
+  showToast(`✓ Started ${nextQ} for ${name} — prior-quarter data auto-loaded where available`);
+}
 function startNextQuarterConfirm(){
   const isInv=state.source==='investment'||state.source==='vestmint';
   const name=isInv?(state.investmentName||""):(state.propertyName||"");
