@@ -2738,9 +2738,11 @@ body{font-family:Georgia,serif;background:var(--cream);color:var(--text);}
 .cb .np{padding:52px 20px;text-align:center;background:var(--teal-light);border:1px solid var(--border);border-radius:8px;color:var(--teal-mid);font-family:sans-serif;font-size:11px;font-style:italic;letter-spacing:0.5px;}
 .cg>.cb:last-child:nth-child(odd){grid-column:1/-1;}
 /* The odd last chart spans the full row, but cap its size and center it — a
-   740px-wide chart dwarfed the others. ~62% width ≈ 460px: comfortably larger
-   than the 360px grid charts without dominating the page. */
-.cg>.cb:last-child:nth-child(odd) img{max-width:62%;margin:0 auto;}
+   740px-wide chart dwarfed the others AND could overflow the printed page.
+   The HEIGHT cap is what guarantees print fit (chart screenshots vary in
+   aspect ratio; a width cap alone let tall charts push the page past 1056px
+   and split to a second sheet). 190px ≈ slightly larger than the grid charts. */
+.cg>.cb:last-child:nth-child(odd) img{width:auto;max-width:62%;max-height:190px;margin:0 auto;}
 .lg{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:24px;}
 .lc{background:var(--teal-light);border-radius:8px;padding:14px;text-align:center;font-family:sans-serif;}
 .ll{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;}
