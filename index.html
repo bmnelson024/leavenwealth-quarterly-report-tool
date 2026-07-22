@@ -3358,7 +3358,8 @@ function uploadBpCapex(){
         remodels:parsed.remodels||null,
         remodelsCount:rc,
         totalAllCapex:parsed.totalAllCapex||0,
-        unitSplit:parsed.unitSplit||null
+        unitSplit:parsed.unitSplit||null,
+        remodelSpend:parsed.remodelSpend||0  // all Capex Remodel account spend (AppFolio GL only)
       };
       render();
     };
@@ -4479,28 +4480,46 @@ ${sec.businessPlan && bp.enabled ? `
       <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-bottom:14px;">
         <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:5px;"></div>
       </div>`:""}
-      ${spent>0&&remodels.length>0?`
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
-        <div style="background:#e6f9f4;border-radius:8px;padding:12px 14px;border-left:3px solid #00c48c;">
-          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Unit Remodel Spend</div>
-          <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${remodelsTotal.toLocaleString()}</div>
-          <div style="font-size:10px;color:#5a8070;margin-top:2px">${remodelPct}% of all property capex</div>
-        </div>
-        <div style="background:#f3f4f6;border-radius:8px;padding:12px 14px;border-left:3px solid #9ca3af;">
+      ${spent>0&&remodels.length>0?(()=>{
+        // Reconciliation (Brian, Jul 2026): "Spend on Completed Remodels" (sum of
+        // the qualifying ≥$2,000 units) and "Spent to Date" (all remodel-account
+        // spend) differ by in-progress/sub-threshold units and bulk purchases —
+        // show that middle bucket explicitly so the two figures visibly tie out.
+        // remodelAcctSpend only exists for AppFolio GL imports; Buildium keeps
+        // the original "Other Property CapEx" middle card.
+        const remodelAcctSpend=(bp.bpCapexParsed&&bp.bpCapexParsed.remodelSpend)||0;
+        const inProgress=remodelAcctSpend>remodelsTotal?Math.round(remodelAcctSpend-remodelsTotal):0;
+        const barPct=totalAllCapex>0?Math.round((remodelAcctSpend||remodelsTotal)/totalAllCapex*100):0;
+        const midCard=inProgress>0
+          ?`<div style="background:#f3f4f6;border-radius:8px;padding:12px 14px;border-left:3px solid #9ca3af;">
+          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">In-Progress &amp; Bulk Remodel Spend</div>
+          <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${inProgress.toLocaleString()}</div>
+          <div style="font-size:10px;color:#5a8070;margin-top:2px">units below completion threshold &amp; unassigned purchases</div>
+        </div>`
+          :`<div style="background:#f3f4f6;border-radius:8px;padding:12px 14px;border-left:3px solid #9ca3af;">
           <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Other Property CapEx</div>
           <div style="font-size:18px;font-weight:700;color:#1a3a35;">${otherCapex>0?'$'+otherCapex.toLocaleString():'—'}</div>
           <div style="font-size:10px;color:#5a8070;margin-top:2px">${totalAllCapex>0?(100-remodelPct)+'% of all property capex':''}</div>
+        </div>`;
+        return `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        <div style="background:#e6f9f4;border-radius:8px;padding:12px 14px;border-left:3px solid #00c48c;">
+          <div style="font-size:9px;color:#5a8070;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Spend on Completed Remodels</div>
+          <div style="font-size:18px;font-weight:700;color:#1a3a35;">$${remodelsTotal.toLocaleString()}</div>
+          <div style="font-size:10px;color:#5a8070;margin-top:2px">${remodels.length} unit${remodels.length!==1?'s':''} completed</div>
         </div>
+        ${midCard}
         <div style="background:#1a3a35;border-radius:8px;padding:12px 14px;">
           <div style="font-size:9px;color:#00c48c;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Avg Cost / Remodeled Unit</div>
           <div style="font-size:18px;font-weight:700;color:white;">$${avgPerUnit.toLocaleString()}</div>
           <div style="font-size:10px;color:#00c48c;margin-top:2px">${remodels.length} unit${remodels.length!==1?'s':''} remodeled</div>
         </div>
       </div>
-      ${totalAllCapex>0?`<div style="margin-bottom:4px;display:flex;justify-content:space-between;font-size:10px;color:#5a8070"><span>Remodel spend vs. other property capex</span><span>${remodelPct}% / ${100-remodelPct}%</span></div>
+      ${inProgress>0?`<div style="font-size:10px;color:#5a8070;margin-bottom:8px;">Completed remodels ($${remodelsTotal.toLocaleString()}) + in-progress &amp; bulk ($${inProgress.toLocaleString()}) = total remodel spend to date ($${remodelAcctSpend.toLocaleString()})</div>`:""}
+      ${totalAllCapex>0?`<div style="margin-bottom:4px;display:flex;justify-content:space-between;font-size:10px;color:#5a8070"><span>Remodel spend vs. other property capex</span><span>${barPct}% / ${100-barPct}%</span></div>
       <div style="height:8px;background:#f3f4f6;border-radius:4px;overflow:hidden;margin-bottom:16px;">
-        <div style="height:100%;width:${remodelPct}%;background:#00c48c;border-radius:4px;"></div>
-      </div>`:'<div style="height:8px;margin-bottom:16px;"></div>'}`:''}
+        <div style="height:100%;width:${barPct}%;background:#00c48c;border-radius:4px;"></div>
+      </div>`:'<div style="height:8px;margin-bottom:16px;"></div>'}`;
+      })():''}
       ${remodels.length>0?`<div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#f0fdf8;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;">
           <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Remodeled Units</div>
