@@ -2914,7 +2914,10 @@ ${secOn.leasing?`<div class="page">
     ${m.capex?`<div class="lc"><div class="ll">Capex Total</div><div class="lv">${fmtWhole(m.capex)}</div></div>`:""}`}
   </div>
   ${_hasLeasingCharts?`<div class="cg">
-    ${["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_occupancy_rate:Occupancy Rate","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
+    ${/* Occupancy Rate is deliberately LAST: with an odd chart count the last
+         chart spans full width (.cg>.cb:last-child:nth-child(odd)), and occupancy
+         is the one that deserves the big slot — not utility income vs. expense. */""}
+    ${["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense","chart_occupancy_rate:Occupancy Rate"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
   </div>`:""}
   <div class="footer-prop">${prop}</div>
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
@@ -7291,7 +7294,7 @@ function parseAFCapexGL(fileData, quarterStr) {
 
     // Detect AF GL format: look for header row with "GL Account" and "Payee"
     let headerRowIdx = -1;
-    let colDate=-1, colDebit=-1, colCredit=-1, colPayee=-1, colDesc=-1, colRemarks=-1;
+    let colDate=-1, colDebit=-1, colCredit=-1, colPayee=-1, colDesc=-1, colRemarks=-1, colGL=-1;
     for(let i=0; i<Math.min(20, rows.length); i++) {
       const cells = (rows[i]||[]).map(c=>String(c==null?"":c).trim().toLowerCase());
       const hasGLAccount = cells.some(c=>c==="gl account");
@@ -7304,6 +7307,7 @@ function parseAFCapexGL(fileData, quarterStr) {
         colPayee   = cells.findIndex(c=>c.includes("payee"));
         colDesc    = cells.findIndex(c=>c==="description");
         colRemarks = cells.findIndex(c=>c==="remarks");
+        colGL      = cells.findIndex(c=>c==="gl account");
         break;
       }
     }
@@ -7324,7 +7328,21 @@ function parseAFCapexGL(fileData, quarterStr) {
     // isAFGLMonthFormat: file is pre-filtered to capex accounts — all rows are capex.
     // Classic format: sections are demarcated by "Capital Expenditures — ..." account headers.
     let inCapexSection = isAFGLMonthFormat; // pre-filtered files start in capex mode
-    const vendorMap = new Map(); // vendor → net amount
+    // Grouping: by GL ACCOUNT ("Capex Plumbing") rather than vendor ("Dogan
+    // Enterprise LLC") — investors care about what the money bought, not who was
+    // paid. Account comes from the per-row "GL Account" column (month-grouped
+    // format) or the current "Capital Expenditures — ..." section header (classic
+    // format). Vendor grouping is kept only as a fallback for files with no
+    // account information at all.
+    const _cleanCapexAcct = s => {
+      let n = String(s).replace(/^\s*\d[\d.\-]*\s*[-–—:]?\s*/, "").trim();     // strip leading GL number
+      n = n.replace(/^capital\s*expenditures?\s*[-–—:]?\s*/i, "Capex ").trim(); // "Capital Expenditures - Plumbing" → "Capex Plumbing"
+      return (!n || n === "Capex") ? "Capital Expenditures" : n;
+    };
+    let currentAccount = null;   // classic format: set by the active section header
+    let hasAcctInfo = false;     // true once any row resolves a real account
+    const accountMap = new Map(); // GL account → net amount (preferred)
+    const vendorMap = new Map();  // vendor → net amount (fallback)
 
     for(let i=headerRowIdx+1; i<rows.length; i++) {
       const row = rows[i] || [];
@@ -7340,8 +7358,10 @@ function parseAFCapexGL(fileData, quarterStr) {
         // Classic format: GL account section header — toggle capex mode
         if(/capital\s*expend/i.test(col0)) {
           inCapexSection = true; // Enter (or stay in) a capex account — accumulate across all capex accts
+          currentAccount = col0; // remember which capex account this section is (for GL-account grouping)
         } else if(!isAFGLMonthFormat) {
           inCapexSection = false; // Not a capex account — keep scanning in case more capex accounts appear later
+          currentAccount = null;
         }
         continue;
       }
@@ -7373,6 +7393,15 @@ function parseAFCapexGL(fileData, quarterStr) {
       //   1. Payee/Payer (direct checks — most reliable)
       //   2. Remarks when it's an actual vendor name, not a reclass label
       //   3. Generic "Unit Turn Materials & Labor" for all other journal-entry reclasses
+      // GL-account grouping (preferred): per-row GL Account column, else the
+      // classic format's active section header. Rows with no account info land
+      // in a generic bucket so the account view's total still matches.
+      const glVal = String(colGL>=0&&row[colGL]!=null ? row[colGL] : "").trim();
+      const acctRaw = glVal || currentAccount || "";
+      if(acctRaw) hasAcctInfo = true;
+      const acctName = acctRaw ? _cleanCapexAcct(acctRaw) : "Other Capital Expenditures";
+      accountMap.set(acctName, (accountMap.get(acctName)||0) + net);
+
       const payeeVal   = String(colPayee>=0&&row[colPayee]!=null   ? row[colPayee]   : "").trim();
       const remarksVal = String(colRemarks>=0&&row[colRemarks]!=null? row[colRemarks] : "").trim();
       const isReclass  = /^reclass/i.test(remarksVal) || /^switch\b/i.test(remarksVal);
@@ -7388,9 +7417,12 @@ function parseAFCapexGL(fileData, quarterStr) {
       vendorMap.set(vendor, (vendorMap.get(vendor)||0) + net);
     }
 
-    if(!vendorMap.size) return null;
+    // Prefer the GL-account view whenever the file carried real account info;
+    // fall back to the vendor view otherwise (better than one anonymous bucket).
+    const chosenMap = hasAcctInfo ? accountMap : vendorMap;
+    if(!chosenMap.size) return null;
 
-    const capexItems = [...vendorMap.entries()]
+    const capexItems = [...chosenMap.entries()]
       .filter(([,amt]) => amt > 0)
       .sort((a,b) => b[1]-a[1])
       .map(([name, amount]) => ({name, amount}));
