@@ -2919,16 +2919,40 @@ ${secOn.leasing?`<div class="page">
     ${m.avgEconOcc?`<div class="lc"><div class="ll">Avg Econ. Occupancy</div><div class="lv">${m.avgEconOcc}%</div></div>`:""}
     ${m.capex?`<div class="lc"><div class="ll">Capex Total</div><div class="lv">${fmtWhole(m.capex)}</div></div>`:""}`}
   </div>
-  ${_hasLeasingCharts?`<div class="cg">
-    ${/* Occupancy Rate is deliberately LAST: with an odd chart count the last
-         chart spans full width (.cg>.cb:last-child:nth-child(odd)), and occupancy
-         is the one that deserves the big slot — not utility income vs. expense. */""}
-    ${["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense","chart_occupancy_rate:Occupancy Rate"].map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?`<div class="cb"><img src="${src}" alt="${escapeHtml(t)}"/></div>`:null;}).filter(Boolean).join("")}
-  </div>`:""}
+  ${(()=>{
+    // Occupancy Rate is deliberately LAST in this list — when the chart count is
+    // odd, the last chart is pulled OFF the grid onto its own "Leasing
+    // (continued)" page below (a fifth chart squeezed onto this page overflowed
+    // the printed sheet no matter how it was sized). The leasing page therefore
+    // always shows an even, balanced grid.
+    if(!_hasLeasingCharts) return "";
+    const present=["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense","chart_occupancy_rate:Occupancy Rate"]
+      .map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?{src,t}:null;}).filter(Boolean);
+    const onGrid=present.length%2===1?present.slice(0,-1):present;
+    return onGrid.length?`<div class="cg">${onGrid.map(c=>`<div class="cb"><img src="${c.src}" alt="${escapeHtml(c.t)}"/></div>`).join("")}</div>`:"";
+  })()}
   <div class="footer-prop">${prop}</div>
   <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
   <div class="pgn">${pg.v()}</div>
-</div>`:""}
+</div>${(()=>{
+  // Leasing continuation page: the odd leftover chart (normally Occupancy Rate)
+  // gets a full page to itself — centered, generously sized, with its own
+  // header, footer, and page number. Deterministic print fit, no overflow.
+  if(!_hasLeasingCharts) return "";
+  const present=["chart_lease_expirations:Lease Expirations","chart_rent_growth:Rent Growth & Market Rent","chart_loss_to_lease:Loss to Lease","chart_utility_income_expense:Utility Income vs. Expense","chart_occupancy_rate:Occupancy Rate"]
+    .map(s=>{const[k,t]=s.split(":");const src=chartSrc(k);return src?{src,t}:null;}).filter(Boolean);
+  if(present.length%2===0) return "";
+  const solo=present[present.length-1];
+  return `<div class="page">
+  <div class="pn">${prop}</div><div class="sh">Leasing — ${qtr} <span style="font-size:11px;font-weight:400;letter-spacing:1px;opacity:0.7">(continued)</span></div>
+  <div style="display:flex;align-items:center;justify-content:center;height:760px">
+    <img src="${solo.src}" alt="${escapeHtml(solo.t)}" style="width:auto;height:auto;max-width:92%;max-height:640px"/>
+  </div>
+  <div class="footer-prop">${prop}</div>
+  <img src="${LOGO_SYMBOL}" alt="LeavenWealth" class="footer-logo"/>
+  <div class="pgn">${pg.v()}</div>
+</div>`;
+})()}`:""}
 ${(()=>{
   // Capital Improvements is now split into two kinds of pages:
   //   1) one or more "table" pages with the line-item list (paginated by CAPEX_PER_PAGE),
