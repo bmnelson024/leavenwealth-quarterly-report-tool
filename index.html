@@ -3330,7 +3330,7 @@ function uploadBpCapex(){
         // Normalise AppFolio result
         const items=(parsed.capexItems||[]).map(i=>({name:i.name||i.label||"",amount:i.total||i.amount||0})).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
         const remodels=parsed.remodelUnits||[];
-        parsed={totalCapex:parsed.totalCapex, items, remodels:remodels.length?remodels:null, remodelsCount:remodels.length, totalAllCapex:parsed.totalCapex};
+        parsed={totalCapex:parsed.totalCapex, items, remodels:remodels.length?remodels:null, remodelsCount:remodels.length, totalAllCapex:parsed.totalCapex, unitSplit:parsed.unitSplit||null};
       } else {
         // Try Business Plan-specific Buildium parser
         parsed=null;
@@ -3354,7 +3354,8 @@ function uploadBpCapex(){
         itemCount:items.length, items,
         remodels:parsed.remodels||null,
         remodelsCount:rc,
-        totalAllCapex:parsed.totalAllCapex||0
+        totalAllCapex:parsed.totalAllCapex||0,
+        unitSplit:parsed.unitSplit||null
       };
       render();
     };
@@ -4509,6 +4510,36 @@ ${sec.businessPlan && bp.enabled ? `
 <!-- PAGE BP2: BUSINESS PLAN ROI -->
 <div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
+  ${(()=>{
+    // Unit-Level vs Property & Common-Area split (unit-attribution rule: a
+    // transaction coded to a specific unit is unit spend; unit-blank rows are
+    // property/exterior work — building electrical, pavement, roofs). Only
+    // renders for AppFolio GL imports that carry a Unit column.
+    const us=bp.bpCapexParsed&&bp.bpCapexParsed.unitSplit;
+    if(!us||(us.unitSpend<=0&&us.commonSpend<=0)) return "";
+    const tot=us.unitSpend+us.commonSpend;
+    const uPct=tot>0?Math.round(us.unitSpend/tot*100):0;
+    const cPct=tot>0?100-uPct:0;
+    const topCommon=(us.commonItems||[]).slice(0,3).map(i=>escapeHtml(i.name)).join(", ");
+    return `<div style="margin-bottom:16px">
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Unit-Level vs. Property &amp; Common-Area Spend</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px;">
+        <div style="background:#e6f9f4;border-radius:8px;padding:12px 14px;border-left:3px solid var(--teal);">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Unit-Level Improvements</div>
+          <div style="font-size:18px;font-weight:700;color:var(--dark)">$${us.unitSpend.toLocaleString()} <span style="font-size:11px;font-weight:600;color:var(--muted)">(${uPct}%)</span></div>
+        </div>
+        <div style="background:#f9fffe;border:1px solid #c8e6de;border-radius:8px;padding:12px 14px;">
+          <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Property &amp; Common-Area Work</div>
+          <div style="font-size:18px;font-weight:700;color:var(--dark)">$${us.commonSpend.toLocaleString()} <span style="font-size:11px;font-weight:600;color:var(--muted)">(${cPct}%)</span></div>
+        </div>
+      </div>
+      <div style="height:10px;background:#e5e7eb;border-radius:5px;overflow:hidden;display:flex;">
+        <div style="height:100%;width:${uPct}%;background:var(--teal);"></div>
+        <div style="height:100%;width:${cPct}%;background:#9fd4c7;"></div>
+      </div>
+      ${topCommon?`<div style="font-size:10px;color:var(--muted);margin-top:6px;">Property-level work concentrated in: ${topCommon}</div>`:""}
+    </div>`;
+  })()}
   ${(()=>{
     // Capital Spend by Category table (moved from page 1 to avoid overflow)
     const _capexItems2=(bp.bpCapexParsed&&bp.bpCapexParsed.items)||[];
@@ -7422,6 +7453,12 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
     const accountMap = new Map(); // GL account → net amount (preferred)
     const vendorMap = new Map();  // vendor → net amount (fallback)
     const remodelUnitMap = new Map(); // unit → net cost within remodel accounts
+    // Unit-attribution split (Brian, Jul 2026): a transaction coded to a specific
+    // unit is UNIT-LEVEL spend; one with no unit is PROPERTY/COMMON spend
+    // (building electrical, pavement, roofs...). Only possible when the export
+    // has a Unit column.
+    let unitSpend=0, commonSpend=0;
+    const commonAccountMap = new Map(); // account → net for unit-blank rows
 
     for(let i=headerRowIdx+1; i<rows.length; i++) {
       const row = rows[i] || [];
@@ -7481,11 +7518,16 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
       const acctName = acctRaw ? _cleanCapexAcct(acctRaw) : "Other Capital Expenditures";
       accountMap.set(acctName, (accountMap.get(acctName)||0) + net);
 
+      const unitVal = String(colUnit>=0&&row[colUnit]!=null ? row[colUnit] : "").trim();
       // Remodel-unit tracking: distinct units charged under a "Capex Remodel"-
       // style account, with summed cost — powers Units Completed + per-unit ROI.
-      if(/remodel/i.test(acctRaw)){
-        const unitVal = String(colUnit>=0&&row[colUnit]!=null ? row[colUnit] : "").trim();
-        if(unitVal) remodelUnitMap.set(unitVal, (remodelUnitMap.get(unitVal)||0) + net);
+      if(/remodel/i.test(acctRaw) && unitVal){
+        remodelUnitMap.set(unitVal, (remodelUnitMap.get(unitVal)||0) + net);
+      }
+      // Unit vs property attribution
+      if(colUnit>=0){
+        if(unitVal) unitSpend += net;
+        else { commonSpend += net; commonAccountMap.set(acctName, (commonAccountMap.get(acctName)||0) + net); }
       }
 
       const payeeVal   = String(colPayee>=0&&row[colPayee]!=null   ? row[colPayee]   : "").trim();
@@ -7515,11 +7557,27 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
 
     if(!capexItems.length) return null;
     const totalCapex = capexItems.reduce((s,i)=>s+i.amount, 0);
+    // A unit counts as REMODELED only when its net Capex Remodel spend clears
+    // this threshold — small charges coded to the remodel account (a $75
+    // faucet, blinds) are repairs, not remodels, and shouldn't inflate Units
+    // Completed or the ROI section in an investor report. $2,000 chosen by
+    // Brian (Jul 2026): above the portfolio's median per-unit remodel spend,
+    // below full-scope remodel cost.
+    const REMODEL_MIN_SPEND = 2000;
     const remodelUnits = [...remodelUnitMap.entries()]
-      .filter(([,cost]) => cost > 0)
+      .filter(([,cost]) => cost >= REMODEL_MIN_SPEND)
       .sort((a,b) => b[1]-a[1])
       .map(([unit, totalCost]) => ({unit, totalCost}));
-    return {capexItems, totalCapex, remodelUnits};
+    // Unit vs property split — null when the export has no Unit column.
+    const unitSplit = colUnit>=0 ? {
+      unitSpend: Math.round(unitSpend),
+      commonSpend: Math.round(commonSpend),
+      commonItems: [...commonAccountMap.entries()]
+        .filter(([,amt]) => amt > 0)
+        .sort((a,b) => b[1]-a[1])
+        .map(([name, amount]) => ({name, amount}))
+    } : null;
+    return {capexItems, totalCapex, remodelUnits, unitSplit};
   } catch(e) {
     console.warn('parseAFCapexGL failed:', e);
     return null;
