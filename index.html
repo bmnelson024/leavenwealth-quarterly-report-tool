@@ -806,8 +806,11 @@ function clearImportedProp(propId){
 }
 // Returns all saved investment reports that have invMetrics
 function getInvestmentSaves(){
-  return getSavesIndex().filter(s=>s.source==='investment').map(s=>{
-    try{const d=JSON.parse(dbGet(SAVE_PREFIX+s.key)||"null");return d&&d.invMetrics?{key:s.key,name:s.propertyName,quarter:s.quarter,invMetrics:d.invMetrics}:null;}catch(e){return null;}
+  // Includes BOTH portfolio-level modes: 'investment' and 'vestmint'. VestMint
+  // fund reports carry the same invMetrics and were previously invisible in the
+  // previous-quarter picker, so a VestMint Q2 couldn't select its own Q1.
+  return getSavesIndex().filter(s=>s.source==='investment'||s.source==='vestmint').map(s=>{
+    try{const d=JSON.parse(dbGet(SAVE_PREFIX+s.key)||"null");return d&&d.invMetrics?{key:s.key,name:s.propertyName,quarter:s.quarter,source:s.source,invMetrics:d.invMetrics}:null;}catch(e){return null;}
   }).filter(Boolean);
 }
 function loadInvPrevFromSave(saveKey){
@@ -5452,7 +5455,7 @@ function renderInvestmentStep0(){
             ${invSaves.length===0?`<div style="font-size:12px;color:#9ca3af;font-style:italic">No saved investment reports found yet. Complete and save an investment report first.</div>`
             :invSaves.map(s=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:white;border:1px solid #c8e6de;border-radius:6px;margin-bottom:6px">
               <div>
-                <div style="font-size:13px;font-weight:600;color:#1a3a35">${escapeHtml(s.name)}</div>
+                <div style="font-size:13px;font-weight:600;color:#1a3a35">${escapeHtml(s.name)} ${s.source==='vestmint'?`<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;background:#d1fae5;color:#065f46;margin-left:4px">VESTMINT</span>`:""}</div>
                 <div style="font-size:11px;color:#9ca3af">${escapeHtml(s.quarter)} &nbsp;·&nbsp; NOI ${fmtWhole(s.invMetrics.noi)} &nbsp;·&nbsp; Occ ${s.invMetrics.occupancy}%</div>
               </div>
               <button onclick="loadInvPrevFromSave('${attrJs(s.key)}')" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer">Use This</button>
@@ -8655,6 +8658,41 @@ function calcNextQuarterLabel(quarter){
 // Home-card entry point: start the NEXT quarter directly from a saved report
 // without resuming it first (previously the only button lived inside an open
 // report, forcing a resume + navigate just to start the new quarter).
+// Shared core for both "Start Next Quarter" entry points (in-report button and
+// home-card button): resets the form keeping the source, carries the name over,
+// pre-fills the next quarter, fires the mode-appropriate auto-loads, and SAVES
+// IMMEDIATELY so the new report appears in All Reports right away (previously it
+// existed only in memory until the first manual save).
+function _beginNextQuarter(src,name,nextQ){
+  const isInv=src==='investment'||src==='vestmint';
+  selectSource(src);
+  if(isInv) state.investmentName=name; else state.propertyName=name;
+  state.currentQuarter=nextQ;
+  state.showHome=false;
+  state.step=0;
+  if(!isInv){
+    // Re-fire the property-scoped auto-loads that normally run on name blur.
+    const savedPhoto=loadPhotoForProperty(name);
+    if(savedPhoto){ state.propertyPhoto=savedPhoto; state.photoAutoLoaded=true; }
+    const facts=loadAssetFactsForProperty(name);
+    if(facts) state.assetFacts=facts;
+    tryAutoLoadPriorOccupancy();
+  } else {
+    // Investment/VestMint: auto-load the prior quarter's portfolio metrics for
+    // the QoQ comparison — same fuzzy prev-quarter lookup as single mode.
+    // (Previously nothing auto-loaded invPrevMetrics for these modes.)
+    try{
+      const prevKey=findPrevQuarterSaveKeyFor(name,true);
+      if(prevKey){
+        const pd=JSON.parse(dbGet(SAVE_PREFIX+prevKey)||"null");
+        if(pd&&pd.invMetrics){ state.invPrevMetrics=pd.invMetrics; state._invPrevSource=prevKey; }
+      }
+    }catch(e){console.warn('_beginNextQuarter: prev invMetrics auto-load failed:',e);}
+  }
+  try{ saveProgress({silent:true,allowEmpty:true}); }catch(e){console.warn('_beginNextQuarter: initial save failed:',e);}
+  render();
+  showToast(`✓ Started ${nextQ} for ${name} — saved to All Reports, prior-quarter data auto-loaded where available`);
+}
 function startNextQuarterFromSave(key){
   let d=null;
   try{ d=JSON.parse(dbGet(SAVE_PREFIX+key)||"null"); }catch(e){}
@@ -8672,20 +8710,7 @@ function startNextQuarterFromSave(key){
     return;
   }
   if(!confirm(`Start ${nextQ} for ${name}?\n\nThe ${d.currentQuarter||"current"} report stays saved. A new ${nextQ} report will open with prior-quarter data carried over automatically.`)) return;
-  selectSource(src);
-  if(isInv) state.investmentName=name; else state.propertyName=name;
-  state.currentQuarter=nextQ;
-  state.showHome=false;
-  state.step=0;
-  if(!isInv){
-    const savedPhoto=loadPhotoForProperty(name);
-    if(savedPhoto){ state.propertyPhoto=savedPhoto; state.photoAutoLoaded=true; }
-    const facts=loadAssetFactsForProperty(name);
-    if(facts) state.assetFacts=facts;
-    tryAutoLoadPriorOccupancy();
-  }
-  render();
-  showToast(`✓ Started ${nextQ} for ${name} — prior-quarter data auto-loaded where available`);
+  _beginNextQuarter(src,name,nextQ);
 }
 function startNextQuarterConfirm(){
   const isInv=state.source==='investment'||state.source==='vestmint';
@@ -8704,21 +8729,7 @@ function startNextQuarter(){
   // Best-effort save so nothing in the current form is lost.
   try{saveProgress({silent:true,allowEmpty:true});}catch(e){console.warn('startNextQuarter: pre-save failed:',e);}
   if(!nextQ||!name){ resetAll(); return; } // can't infer context — fall back to old behavior
-  selectSource(src);       // clean mode-preserving reset (also renders — harmless)
-  if(isInv) state.investmentName=name; else state.propertyName=name;
-  state.currentQuarter=nextQ;
-  state.showHome=false;
-  state.step=0;
-  if(!isInv){
-    // Re-fire the property-scoped auto-loads that normally run on name blur.
-    const savedPhoto=loadPhotoForProperty(name);
-    if(savedPhoto){ state.propertyPhoto=savedPhoto; state.photoAutoLoaded=true; }
-    const facts=loadAssetFactsForProperty(name);
-    if(facts) state.assetFacts=facts;
-    tryAutoLoadPriorOccupancy();
-  }
-  render();
-  showToast(`✓ Started ${nextQ} for ${name} — prior-quarter data auto-loaded where available`);
+  _beginNextQuarter(src,name,nextQ);
 }
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 let _authMode = "signin"; // "signin" | "signup"
