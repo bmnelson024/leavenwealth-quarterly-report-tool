@@ -6150,12 +6150,17 @@ function renderVestmintStep2(){
       // ── Business Plan sections ──────────────────────────────────────────────
       // showRemodel: Greenway has remodel progress + budget; Brent Village is rent-growth only.
       function _vmBpSection(bpKey, sectionLabel, showRemodel){
+        // Auto-pull this block's data from the matching investment report's
+        // Business Plan (e.g. Greenway ← MWP 8) when the block is pristine.
+        // Mutates state before the section renders — same pattern as the other
+        // render-time auto-loads; idempotent once any data exists.
+        tryAutoLoadVestmintBp(bpKey);
         const bp=state[bpKey]||{};
         const subtitleParts = showRemodel
           ? 'remodel progress, budget vs. actual, rent growth, and narrative'
           : 'rent growth and narrative';
         return `<div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
-          <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🏗️ Business Plan — ${escapeHtml(sectionLabel)}</div>
+          <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🏗️ Business Plan — ${escapeHtml(sectionLabel)}${bp._autoLoadedFrom&&bp.enabled?`<span style="font-size:10px;background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:4px;font-weight:700;margin-left:8px;text-transform:none;letter-spacing:0">↺ Loaded from ${escapeHtml(bp._autoLoadedFrom)}</span>`:""}</div>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:${bp.enabled?'14px':'0'}">
             <input type="checkbox" ${bp.enabled?"checked":""} onchange="state['${bpKey}'].enabled=this.checked;_refreshVestmintReportHTML();render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
             <div>
@@ -7017,6 +7022,48 @@ function tryAutoLoadPriorBusinessPlan(){
     return true;
   }catch(e){console.warn('tryAutoLoadPriorBusinessPlan failed:',e);}
   return false;
+}
+// Auto-fills a VestMint per-property Business Plan block from the matching
+// INVESTMENT report's Business Plan — e.g. the Greenway block pulls from the
+// MWP 8 report where that data is already maintained, instead of re-entering
+// it by hand. Picks the same quarter's save when it exists, else the most
+// recent. Only fires when the block is pristine, so manual entries and
+// previously-loaded data are never clobbered. rentCurrent is left alone —
+// processInvestmentData auto-fills it from this report's own rent rolls.
+function tryAutoLoadVestmintBp(bpKey){
+  if(state.source!=='vestmint') return false;
+  const bp=state[bpKey];
+  if(!bp) return false;
+  if(bp.enabled||bp.totalBudget||bp.spentToDate||bp.unitsCompleted||bp.rentAtPurchase) return false;
+  const pattern=bpKey==='vestmintBpGreenway'?/greenway/i:/brent/i;
+  const cur=_parseQuarterLabel(state.currentQuarter||"");
+  let best=null,bestRank=-1;
+  try{
+    for(const s of getSavesIndex()){
+      if(!s||s.source!=='investment') continue;
+      let d=null; try{ d=JSON.parse(dbGet(SAVE_PREFIX+s.key)||"null"); }catch(e){ continue; }
+      const dbp=d&&d.businessPlan;
+      if(!dbp||!dbp.enabled) continue;
+      const names=(((d.invMetrics&&d.invMetrics.propertyMetrics)||d.invProperties||[]).map(p=>p&&p.name||"").join(" "))+" "+(d.investmentName||"");
+      if(!pattern.test(names)) continue;
+      const pq=_parseQuarterLabel(s.quarter);
+      const rank=pq?((cur&&pq.q===cur.q&&pq.yr===cur.yr)?1e9:pq.yr*4+pq.q):0;
+      if(rank>bestRank){ bestRank=rank; best=d; }
+    }
+  }catch(e){ console.warn('tryAutoLoadVestmintBp scan failed:',e); }
+  if(!best) return false;
+  const sbp=best.businessPlan;
+  state[bpKey]={...bp,
+    enabled:true,
+    totalBudget:sbp.totalBudget||'',
+    spentToDate:sbp.spentToDate||'',
+    unitsCompleted:sbp.unitsCompleted||'',
+    unitsRemaining:sbp.unitsRemaining||'',
+    rentAtPurchase:sbp.launchRentPerUnit||'',
+    narrative:bp.narrative||sbp.narrative||''
+  };
+  state[bpKey]._autoLoadedFrom=((best.investmentName||'investment report')+' '+(best.currentQuarter||'')).trim();
+  return true;
 }
 function onPropertyNameChange(val){
   const oldName=state.propertyName;
@@ -8686,6 +8733,14 @@ function _beginNextQuarter(src,name,nextQ){
       if(prevKey){
         const pd=JSON.parse(dbGet(SAVE_PREFIX+prevKey)||"null");
         if(pd&&pd.invMetrics){ state.invPrevMetrics=pd.invMetrics; state._invPrevSource=prevKey; }
+        // VestMint: carry the Other Assets STRUCTURE forward (e.g. Real Freedom
+        // Fund) — the asset names persist quarter to quarter, but each entry
+        // starts without HTML since every quarter gets a fresh fund report file.
+        if(src==='vestmint'&&pd&&Array.isArray(pd.vestmintOtherAssets)&&pd.vestmintOtherAssets.length){
+          state.vestmintOtherAssets=pd.vestmintOtherAssets
+            .filter(a=>a&&(a.name||"").trim())
+            .map((a,i)=>({id:Date.now()+i, name:a.name, html:''}));
+        }
       }
     }catch(e){console.warn('_beginNextQuarter: prev invMetrics auto-load failed:',e);}
   }
