@@ -2876,8 +2876,14 @@ ${(()=>{
   <div style="display:flex;gap:20px;margin-top:20px;flex-wrap:wrap">
     ${hasPrincipal?`<div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #c8e6de;border-radius:12px;padding:20px 24px;font-family:sans-serif">
       <div style="font-size:11px;font-weight:700;color:#2e7d6e;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Total Loan Principal Paid</div>
-      ${loan.principalInception?`<div style="margin-bottom:12px"><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${loanInceptionDate}</div><div style="font-size:26px;font-weight:700;color:#1a3a35">${loanInception}</div></div>`:""}
-      ${loan.principalCurrent?`<div><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${loanCurrentDate}</div><div style="font-size:26px;font-weight:700;color:#1a3a35">${loanCurrent}</div></div>`:""}
+      ${""/* Single period only: inception → current. Falls back to the legacy
+            prior-year-end pair for old saves that only carry that figure. */}
+      ${(()=>{
+        const useCurrent=!!loan.principalCurrent;
+        const amt=useCurrent?loanCurrent:loanInception;
+        const dt=useCurrent?loanCurrentDate:loanInceptionDate;
+        return `<div><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${dt}</div><div style="font-size:26px;font-weight:700;color:#1a3a35">${amt}</div></div>`;
+      })()}
     </div>`:""}
     ${hasWriteoffs?`<div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #c8e6de;border-radius:12px;padding:20px 24px;font-family:sans-serif">
       <div style="font-size:11px;font-weight:700;color:#2e7d6e;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Total Write-offs from Inception</div>
@@ -4383,8 +4389,13 @@ ${(()=>{
     ${hasPrincipal?`<div class="loan-tile">
       <h3>Total Loan Principal Paid</h3>
       <div class="loan-inner">
-        ${loan.principalInception?`<div><div class="ll2">Inception – ${loanInceptionDate}</div><div class="lv2">${loanInception}</div></div>`:""}
-        ${loan.principalCurrent?`<div><div class="ll2">Inception – ${loanDate}</div><div class="lv2">${loanCurrent}</div></div>`:""}
+        ${""/* Single period only: inception → current, with legacy fallback. */}
+        ${(()=>{
+          const useCurrent=!!loan.principalCurrent;
+          const amt=useCurrent?loanCurrent:loanInception;
+          const dt=useCurrent?loanDate:loanInceptionDate;
+          return `<div><div class="ll2">Inception – ${dt}</div><div class="lv2">${amt}</div></div>`;
+        })()}
       </div>
     </div>`:""}
     ${hasWriteoffs?`<div class="loan-tile">
@@ -5471,21 +5482,14 @@ function renderInvestmentStep0(){
         <input type="checkbox" ${state.invSections.loanPrincipal?"checked":""} onchange="state.invSections.loanPrincipal=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
         <span style="font-size:12px;font-weight:600;color:#1a3a35">Include Loan Principal Paid in report</span>
       </label>
-      ${state.invSections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;padding-top:2px">
-        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Prior Year-End)</label>
-          <input type="text" placeholder="e.g. 289,116.08" value="${escapeHtml(state.invLoan.principalInception||'')}"
-            oninput="state.invLoan.principalInception=this.value"
-            style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Prior Year-End Date (for label)</label>
-          <input type="text" placeholder="e.g. 12/31/2024" value="${escapeHtml(state.invLoan.principalInceptionDate||'')}"
-            oninput="state.invLoan.principalInceptionDate=this.value"
-            style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Principal Paid (Inception → Current)</label>
-          <input type="text" placeholder="e.g. 438,302.06" value="${escapeHtml(state.invLoan.principalCurrent||'')}"
+      ${""/* Single time period only (Brian, Jul 2026): inception → current date. */}
+      ${state.invSections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding-top:2px">
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Total Principal Paid (Inception → Current)</label>
+          <input type="text" placeholder="e.g. 438,302" value="${escapeHtml(state.invLoan.principalCurrent||'')}"
             oninput="state.invLoan.principalCurrent=this.value"
             style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
-        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Date (for label)</label>
-          <input type="text" placeholder="e.g. 12/31/2025" value="${escapeHtml(state.invLoan.principalCurrentDate||'')}"
+        <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">As of Date (for label)</label>
+          <input type="text" placeholder="e.g. 06/30/2026" value="${escapeHtml(state.invLoan.principalCurrentDate||'')}"
             oninput="state.invLoan.principalCurrentDate=this.value"
             style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       </div>`:''}
@@ -8325,21 +8329,17 @@ function render(){
           <input type="checkbox" ${state.sections.loanPrincipal?"checked":""} onchange="state.sections.loanPrincipal=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
           Include Loan Principal Paid in report
         </label>
-        ${state.sections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">Principal Paid (Inception)</div>
-            <input type="text" placeholder="e.g. 289,116.08" value="${escapeHtml(state.loan.principalInception)}"
-              oninput="state.loan.principalInception=this.value"
-              style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
-          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">As of Date (Inception)</div>
-            <input type="text" placeholder="e.g. 12/31/2024" value="${escapeHtml(state.loan.principalInceptionDate||"")}"
-              oninput="state.loan.principalInceptionDate=this.value"
-              style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
-          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">Principal Paid (Current)</div>
-            <input type="text" placeholder="e.g. 438,302.06" value="${escapeHtml(state.loan.principalCurrent)}"
+        ${""/* Single time period only (Brian, Jul 2026): inception → current date.
+              The old prior-year-end pair (principalInception/-Date) is no longer
+              collected; old saves that only carry that pair still render via the
+              report's fallback. */}
+        ${state.sections.loanPrincipal?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">Total Principal Paid (Inception → Current)</div>
+            <input type="text" placeholder="e.g. 438,302" value="${escapeHtml(state.loan.principalCurrent)}"
               oninput="state.loan.principalCurrent=this.value"
               style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
-          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">As of Date (Current)</div>
-            <input type="text" placeholder="e.g. 03/31/2026" value="${escapeHtml(state.loan.principalCurrentDate)}"
+          <div><div style="font-size:11px;font-weight:600;color:#5a8070;margin-bottom:4px">As of Date (for label)</div>
+            <input type="text" placeholder="e.g. 06/30/2026" value="${escapeHtml(state.loan.principalCurrentDate)}"
               oninput="state.loan.principalCurrentDate=this.value"
               style="width:100%;padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;outline:none"/></div>
         </div>`:""}
