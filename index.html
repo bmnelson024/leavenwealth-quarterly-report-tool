@@ -2863,8 +2863,9 @@ ${(()=>{
   const hasPrincipal = secOn.loanPrincipal && (loan.principalInception || loan.principalCurrent);
   const hasWriteoffs  = secOn.writeoffs     && loan.writeoffs;
   if(!hasPrincipal && !hasWriteoffs) return "";
-  const fmtL = v => { const n=parseFloat(String(v).replace(/[,$]/g,"")); return isNaN(n)?"—":"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); };
-  const fmtL0 = v => { const n=parseFloat(String(v).replace(/[,$]/g,"")); return isNaN(n)?"—":"$"+Math.round(n).toLocaleString("en-US"); };
+  // Whole dollars throughout — loan principal and write-offs show no cents.
+  const fmtL = v => { const n=parseFloat(String(v).replace(/[,$]/g,"")); return isNaN(n)?"—":"$"+Math.round(n).toLocaleString("en-US"); };
+  const fmtL0 = fmtL;
   const loanInception     = loan.principalInception     ? fmtL(loan.principalInception)     : "—";
   const loanCurrent       = loan.principalCurrent       ? fmtL(loan.principalCurrent)        : "—";
   const loanInceptionDate = escapeHtml(loan.principalInceptionDate || "—");
@@ -2881,6 +2882,7 @@ ${(()=>{
     ${hasWriteoffs?`<div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #c8e6de;border-radius:12px;padding:20px 24px;font-family:sans-serif">
       <div style="font-size:11px;font-weight:700;color:#2e7d6e;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Total Write-offs from Inception</div>
       <div style="font-size:32px;font-weight:700;color:#1a3a35;margin-top:6px">${writeoffsAmt}</div>
+      <div style="font-size:10px;color:#5a8070;margin-top:8px;font-style:italic">Calculated annually once tax filings are complete</div>
     </div>`:""}
   </div>
   <div class="footer-prop">${prop}</div>
@@ -4184,8 +4186,9 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   // footer. Divider pages (.div-page) suppress their number via CSS so they don't create visible gaps.
   const pg={n:1,v(){return ++this.n;}};
   // Guard against NaN when the user types non-numeric text into a loan field.
-  const fmtLoan2=(raw)=>{const n=parseFloat(String(raw||"0").replace(/[$,]/g,""));return isFinite(n)?`$${n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—";};
-  const fmtLoan0=(raw)=>{const n=parseFloat(String(raw||"0").replace(/[$,]/g,""));return isFinite(n)?`$${n.toLocaleString("en-US")}`:"—";};
+  // Whole dollars throughout — loan principal and write-offs show no cents.
+  const fmtLoan2=(raw)=>{const n=parseFloat(String(raw||"0").replace(/[$,]/g,""));return isFinite(n)?`$${Math.round(n).toLocaleString("en-US")}`:"—";};
+  const fmtLoan0=fmtLoan2;
   const loanInception=loan.principalInception?fmtLoan2(loan.principalInception):"—";
   const loanCurrent=loan.principalCurrent?fmtLoan2(loan.principalCurrent):"—";
   const loanDate=escapeHtml(loan.principalCurrentDate||"—");
@@ -4387,6 +4390,7 @@ ${(()=>{
     ${hasWriteoffs?`<div class="loan-tile">
       <h3>Total Writeoffs from Inception</h3>
       <div style="font-size:28px;font-weight:700;color:var(--dark);margin-top:6px;">${writeoffs}</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:8px;font-style:italic;font-family:sans-serif;">Calculated annually once tax filings are complete</div>
     </div>`:""}
   </div>`;
   })()}
