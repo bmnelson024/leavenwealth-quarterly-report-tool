@@ -2882,12 +2882,12 @@ ${(()=>{
         const useCurrent=!!loan.principalCurrent;
         const amt=useCurrent?loanCurrent:loanInception;
         const dt=useCurrent?loanCurrentDate:loanInceptionDate;
-        return `<div><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${dt}</div><div style="font-size:26px;font-weight:700;color:#1a3a35">${amt}</div></div>`;
+        return `<div><div style="font-size:11px;color:#5a8070;font-weight:600;margin-bottom:2px">Inception – ${dt}</div><div style="font-size:28px;font-weight:700;color:#1a3a35">${amt}</div></div>`;
       })()}
     </div>`:""}
     ${hasWriteoffs?`<div style="flex:1;min-width:200px;background:#f0fdf4;border:1px solid #c8e6de;border-radius:12px;padding:20px 24px;font-family:sans-serif">
       <div style="font-size:11px;font-weight:700;color:#2e7d6e;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Total Write-offs from Inception</div>
-      <div style="font-size:32px;font-weight:700;color:#1a3a35;margin-top:6px">${writeoffsAmt}</div>
+      <div style="font-size:28px;font-weight:700;color:#1a3a35;margin-top:6px">${writeoffsAmt}</div>
       <div style="font-size:10px;color:#5a8070;margin-top:8px;font-style:italic">Calculated annually once tax filings are complete</div>
     </div>`:""}
   </div>
@@ -4274,7 +4274,7 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
 .loan-tile h3{font-size:10px;color:var(--teal);text-transform:uppercase;letter-spacing:2px;margin-bottom:10px;}
 .loan-inner{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .ll2{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;}
-.lv2{font-size:17px;font-weight:700;color:var(--dark);}
+.lv2{font-size:28px;font-weight:700;color:var(--dark);}  /* matches the write-offs tile's 28px so the side-by-side tiles read consistently */
 .ns{margin-bottom:0;padding:13px 0;border-bottom:1px solid var(--border);}.ns:last-of-type{border-bottom:none;}
 .nl{font-family:sans-serif;font-size:10px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;}
 .nt{font-size:13px;line-height:1.75;}
