@@ -3097,7 +3097,11 @@ ${(()=>{
   if(!secOn.balanceSheet) return "";
   const bs = m.balanceSheet;
   if(!bs || !bs.rows || !bs.rows.length) return "";
-  const ROWS_PER_BS = 34;
+  // 30 rows/page (was 34): at 34 the first Brent Village Q2 2026 chunk overflowed
+  // the printed page by exactly one row — section-header rows are taller than
+  // plain rows, so 34 only fit on header-light pages. 30 leaves ~4 rows of
+  // headroom regardless of the header/leaf mix.
+  const ROWS_PER_BS = 30;
   const bsHdr = '<thead><tr>'
     + '<th style="text-align:left;background:var(--dark);color:white;padding:7px 10px;font-size:10px;letter-spacing:1px;font-family:sans-serif;">Account Name</th>'
     + '<th style="text-align:right;background:var(--dark);color:white;padding:7px 10px;font-size:10px;letter-spacing:1px;font-family:sans-serif;white-space:nowrap;">Balance</th>'
@@ -3125,8 +3129,14 @@ ${(()=>{
     return '<tr'+leafCls+'><td'+extraPad+'>'+label+'</td><td class="cur">'+amt+'</td></tr>';
   };
   let bsOut = '';
-  for(let i=0; i<bs.rows.length; i+=ROWS_PER_BS){
-    const chunk = bs.rows.slice(i, i+ROWS_PER_BS);
+  let i = 0;
+  while(i < bs.rows.length){
+    let end = Math.min(i + ROWS_PER_BS, bs.rows.length);
+    // Never end a page on a section header — push it to the next page so it
+    // stays with the accounts beneath it (handles consecutive headers too,
+    // e.g. LIABILITIES followed immediately by CURRENT LIABILITIES).
+    while(end > i+1 && end < bs.rows.length && bs.rows[end-1].isSectionHeader) end--;
+    const chunk = bs.rows.slice(i, end);
     const cont = i>0 ? ' (continued)' : '';
     const asOfNote = (i===0 && bs.asOfDate)
       ? '<div style="font-family:sans-serif;font-size:11px;color:var(--muted);margin:-10px 0 10px">As of '+escapeHtml(bs.asOfDate)+'</div>'
@@ -3141,6 +3151,7 @@ ${(()=>{
       + '<img src="'+LOGO_SYMBOL+'" alt="LeavenWealth" class="footer-logo"/>'
       + '<div class="pgn">'+pg.v()+'</div>'
       + '</div>';
+    i = end;
   }
   return bsOut;
 })()}
