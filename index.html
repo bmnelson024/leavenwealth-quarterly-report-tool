@@ -346,6 +346,14 @@ async function supaBootstrap(){
     const fresh = {};
     const pageSize = 1000;
     let from = 0;
+    // Drain writes ALREADY in flight before taking the snapshot (audit
+    // 2026-07-23 M-6): they predate the tracking set below, so if they landed
+    // after the SELECT their fresh values would be reverted in memory by the
+    // stale snapshot. The post-fetch drain below remains as belt-and-suspenders.
+    if(_pendingWrites.size > 0){
+      console.log('[QRB] supaBootstrap: draining',_pendingWrites.size,'pre-fetch write(s)');
+      await Promise.allSettled([..._pendingWrites]);
+    }
     // Begin tracking local writes for the duration of the fetch (audit M-2).
     _writesSinceFetch = new Set();
     while(true){
@@ -1218,6 +1226,10 @@ async function loadSave(key){
       // than undefined when loading older saves.
       businessPlan:{...makeFreshBusinessPlan(),...(data.businessPlan||{})},
       _bpAutoLoadedFrom:null,  // resumed save carries its own BP — no carry-over badge
+      _bpAutoLoadDeclined:false,
+      // Transient flag must not leak from a previously-processed bad report into
+      // this save; the persisted truth lives in invMetrics._annualFallback (M-2).
+      _incomeAnnualFallback:false,
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       vestmintFundOverview:data.vestmintFundOverview||"",
@@ -1407,7 +1419,7 @@ function confirmAndGenerate(){
   showSavePrompt(()=>generateReport());
 }
 function confirmAndGenerateInv(){
-  if(state._incomeAnnualFallback){
+  if(state._incomeAnnualFallback||(state.invMetrics&&state.invMetrics._annualFallback)){
     showError("⚠️ Report generation is blocked: one or more income statements fell back to annual totals (~4× too high). Re-upload the correct trailing-12-month files or fix the Quarter field, then click Process Data again.");
     return;
   }
@@ -1418,7 +1430,7 @@ function confirmAndGenerateVestmint(){
   // Same annual-fallback gate as confirmAndGenerate / confirmAndGenerateInv —
   // VestMint runs the same processInvestmentData() that can fall back to
   // annual totals (~4× too high), so it needs the same protection.
-  if(state._incomeAnnualFallback){
+  if(state._incomeAnnualFallback||(state.invMetrics&&state.invMetrics._annualFallback)){
     showError("⚠️ Report generation is blocked: one or more income statements fell back to annual totals (~4× too high). Re-upload the correct trailing-12 files or fix the Quarter field, then click Process again.");
     return;
   }
@@ -1499,6 +1511,8 @@ function selectSource(src){
   state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
   state.businessPlan = makeFreshBusinessPlan();
   state._bpAutoLoadedFrom = null;
+  state._bpAutoLoadDeclined = false;    // fresh report — carry-forward allowed again (M-3)
+  state._incomeAnnualFallback = false;  // never leak a prior report's fallback state (M-2)
   // VestMint Fund mode
   state.vestmintFundOverview = "";
   state.vestmintFinancials = [];
@@ -2920,13 +2934,20 @@ ${secOn.leasing?`<div class="page">
       // uploaded (so a report with no leasing/renewal file still hides the tile
       // rather than asserting a false zero). Mirrors the delinquencyKnown
       // pattern; the investment/VestMint pages already show 0s unconditionally.
-      const leasingKnown=!!(state.files.leasingSummary||state.files.leasing||state.files.rentEngine);
-      const renewalsKnown=!!(state.files.renewalSummary||state.files.rentEngine||(state.source==='buildium'&&state.files.leasing));
+      // Per-metric, per-source flags (audit 2026-07-23 M-5): the processors are
+      // stricter than a pooled "any leasing file" check — Buildium counts new
+      // leases/renewals ONLY from the leasing file and inquiries/applications
+      // ONLY from Rent Engine; AppFolio renewals ONLY from the renewal summary.
+      // A pooled flag asserted "0" for metrics that were never measured.
+      const isBu=state.source==='buildium';
+      const leasesKnown  = isBu ? !!state.files.leasing    : !!(state.files.leasingSummary||state.files.leasing);
+      const renewalsKnown= isBu ? !!state.files.leasing    : !!state.files.renewalSummary;
+      const inqAppKnown  = isBu ? !!state.files.rentEngine : !!(state.files.leasingSummary||state.files.leasing);
       return[
-        (m.newLeases||leasingKnown)?`<div class="lc"><div class="ll">New Leases</div><div class="lv">${m.newLeases||0}</div></div>`:"",
+        (m.newLeases||leasesKnown)?`<div class="lc"><div class="ll">New Leases</div><div class="lv">${m.newLeases||0}</div></div>`:"",
         (m.renewals||renewalsKnown)?`<div class="lc"><div class="ll">Renewals</div><div class="lv">${m.renewals||0}</div></div>`:"",
-        (m.inquiries||leasingKnown)?`<div class="lc"><div class="ll">Inquiries</div><div class="lv">${m.inquiries||0}</div></div>`:"",
-        (m.applications||leasingKnown)?`<div class="lc"><div class="ll">Applications</div><div class="lv">${m.applications||0}</div></div>`:""
+        (m.inquiries||inqAppKnown)?`<div class="lc"><div class="ll">Inquiries</div><div class="lv">${m.inquiries||0}</div></div>`:"",
+        (m.applications||inqAppKnown)?`<div class="lc"><div class="ll">Applications</div><div class="lv">${m.applications||0}</div></div>`:""
       ].join("\n    ");
     })()}
     ${state.source==='buildium'?"":`
@@ -3354,7 +3375,7 @@ function uploadBpCapex(){
         // Normalise AppFolio result
         const items=(parsed.capexItems||[]).map(i=>({name:i.name||i.label||"",amount:i.total||i.amount||0})).filter(i=>i.amount>0).sort((a,b)=>b.amount-a.amount);
         const remodels=parsed.remodelUnits||[];
-        parsed={totalCapex:parsed.totalCapex, items, remodels:remodels.length?remodels:null, remodelsCount:remodels.length, totalAllCapex:parsed.totalCapex, unitSplit:parsed.unitSplit||null, remodelSpend:parsed.remodelSpend||0};
+        parsed={totalCapex:parsed.totalCapex, items, remodels:remodels.length?remodels:null, remodelsCount:remodels.length, totalAllCapex:parsed.totalCapex, unitSplit:parsed.unitSplit||null, remodelSpend:parsed.remodelSpend||0, _afGL:true};
       } else {
         // Try Business Plan-specific Buildium parser
         parsed=null;
@@ -3369,7 +3390,13 @@ function uploadBpCapex(){
       // "Amount Spent to Date" draws down the REMODEL budget, so only remodel-
       // account spend counts when the parser can identify it (AppFolio GL path).
       // Buildium files keep the historical all-capital-improvements behavior.
-      state.businessPlan.spentToDate=String(Math.round(parsed.remodelSpend>0?parsed.remodelSpend:parsed.totalCapex));
+      // If an AppFolio GL has NO remodel-named account, do NOT silently fall
+      // back to ALL capex — that overstates the remodel drawdown (audit L-2).
+      if(parsed._afGL && !(parsed.remodelSpend>0)){
+        showError("No 'Capex Remodel' GL account found — Spent to Date was NOT auto-filled (using all capex would overstate the remodel budget drawdown). Enter it manually, or check the GL account naming.");
+      } else {
+        state.businessPlan.spentToDate=String(Math.round(parsed.remodelSpend>0?parsed.remodelSpend:parsed.totalCapex));
+      }
       const rc=parsed.remodelsCount||0;
       if(rc>0){
         state.businessPlan.unitsCompleted=String(rc);
@@ -3589,7 +3616,7 @@ function uploadBpLaunchRent(){
         // Filter: try Buildium pattern first, fall back to AppFolio
         const bdRows=rows.filter(isBuildiumUnitRow);
         if(bdRows.length>0) rows=bdRows;
-        else rows=rows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+        else rows=rows.filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u)&&!/^\d+\s*(bed|bath|br|ba)\b/i.test(u);});  // bed/bath rollup exclusion (audit M-7)
       } else {
         // Text: try Buildium (needs skipMetaRows) first
         const bdRows=parseDelim(skipMetaRows(raw||"")).filter(isBuildiumUnitRow);
@@ -3730,7 +3757,8 @@ function _parseAppFolioRenewalCount(renewalText){
   const renewalRows=parseDelim(renewalText);
   const renewedCount=renewalRows.filter(r=>{
     const s=String(r["Status"]||"").trim();
-    return /renewed/i.test(s) && !/\bnot\s+renewed\b/i.test(s);
+    // Excludes "Not Renewed", "Non-Renewed", and "Non Renewed" (audit L-1)
+    return /renewed/i.test(s) && !/\b(?:not|non)[\s-]+renewed\b/i.test(s);
   }).length;
   if(renewedCount>0) return renewedCount;
   // Fallback 2: numeric Count/Renewals/Offers column. Skip grand-total rows —
@@ -3795,7 +3823,7 @@ function parsePropertyMetrics(prop){
   let occ1=0,occ2=0,occ3=0,mkt=0,act=0,delinquency=0,newLeases=0,renewals=0,inquiries=0,applications=0,cashOnHand=0;
   if(prop.source==='appfolio'){
     occ1=calcOccAppFolio(prop.files.rr1); occ2=calcOccAppFolio(prop.files.rr2); occ3=calcOccAppFolio(prop.files.rr3);
-    const fr=parseDelim(prop.files.rr3||"").filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u);});
+    const fr=parseDelim(prop.files.rr3||"").filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u)&&!/^\d+\s*(bed|bath|br|ba)\b/i.test(u);});  // bed/bath rollup exclusion — feeds mkt/act → monthlyRent → VestMint rentCurrent (audit M-7)
     fr.forEach(r=>{if(!getVacantFlag(r)){mkt+=parseCur(r["Market Rent"]||r["MarketRent"]||r["Mkt Rent"]||r["Computed Market Rent"]||0);act+=parseCur(r["Rent"]||0);}});
     const dr=parseDelim(prop.files.delinquency||"");
     const dt=dr.find(r=>/^total$/i.test((r["Unit"]||r["Name"]||"").trim()));
@@ -3873,7 +3901,7 @@ function _buildUnitCurrentRents(){
       const isBd=prop.source==='buildium';
       const rows=isBd
         ? parseDelim(skipMetaRows(rr3Text)).filter(isBuildiumUnitRow)
-        : parseDelim(rr3Text).filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u);});
+        : parseDelim(rr3Text).filter(r=>{const u=String(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^total/i.test(u)&&!/^->/.test(u)&&!/^\d+\s*(bed|bath|br|ba)\b/i.test(u);});  // bed/bath rollup exclusion — feeds every merged ROI rent map (audit M-7)
       rows.forEach(r=>{
         if(!getVacantFlag(r)){
           const rv=parseCur(r["Rent"]||r["Monthly Rent"]||r["Actual Rent"]||r["ActualRent"]||0);
@@ -3973,7 +4001,11 @@ function processInvestmentData(opts){
     }
     const totalCapex=results.reduce((s,m)=>s+(m.capex||0),0);
     const unitCurrentRents=_buildUnitCurrentRents();
-    state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents};
+    // _annualFallback is stamped INTO invMetrics so it persists through save/
+    // resume (audit 2026-07-23 M-2): investment/vestmint skip rehydration, so a
+    // transient flag alone let corrupted ~4× metrics slip past the generation
+    // gates after a resume. undefined (not false) so clean runs don't bloat saves.
+    state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents,_annualFallback:(state._incomeAnnualFallback===true)||undefined};
     // Show property tax warning if any properties were missing a tax line item
     if(window._propTaxMissingProps && window._propTaxMissingProps.length>0){
       const names=window._propTaxMissingProps;
@@ -3983,11 +4015,15 @@ function processInvestmentData(opts){
         `<strong>${names.map(n=>escapeHtml(n)).join(', ')}</strong>. ` +
         `No line matching "Property Taxes", "Mortgage Escrow Expense", or similar was found${plural?' in these properties':''}. ` +
         `If taxes are paid semi-annually rather than monthly, quarter-over-quarter expense comparisons will be skewed. ` +
-        `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`
+        `Confirm the statement includes a smoothed monthly property tax line — or note this in the narrative.`,
+        'proptax'
       );
       window._propTaxMissingProps=[];
     } else {
-      clearWarning();
+      // Selective clear (audit L-6): only remove a previously-shown PROPERTY-TAX
+      // warning — a bare clearWarning() here wiped unrelated warnings too.
+      const _wb=document.getElementById('warning-box');
+      if(_wb && _wb.dataset.kind==='proptax') clearWarning();
       window._propTaxMissingProps=[];
     }
     // Auto-fill Business Plan Units Remaining now that we know totalUnits
@@ -4030,7 +4066,12 @@ function processInvestmentData(opts){
       showToast("✓ Processed — your edited narratives preserved");
     }
     if(!(opts&&opts.stayOnStep)){state.step=1;}
-    state._savedThisStep=false; render();
+    state._savedThisStep=false;
+    // Warnings emitted during processing ("N properties skipped", missing
+    // leasing/delinquency files, annual fallback) must survive the step
+    // transition — same as the single-property processors (audit M-1).
+    preserveErrorsThroughNextRender();
+    render();
   }catch(e){showError("Error: "+e.message);}
 }
 function genInvestmentNarratives(m){
@@ -5520,7 +5561,7 @@ function renderInvestmentStep0(){
     <div class="section-label">Business Plan Mode <span style="font-weight:400;font-size:11px;color:#9ca3af">— for deals still in remodel / LOC phase</span>${state._bpAutoLoadedFrom&&state.businessPlan.enabled?`<span style="font-size:10px;background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:4px;font-weight:700;margin-left:8px">↺ Launch rents &amp; budget carried from ${escapeHtml(state._bpAutoLoadedFrom)} — re-import CapEx &amp; current rents</span>`:""}</div>
     <div class="econ-box" style="margin-bottom:12px">
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-        <input type="checkbox" ${state.businessPlan.enabled?"checked":""} onchange="state.businessPlan.enabled=this.checked;render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
+        <input type="checkbox" ${state.businessPlan.enabled?"checked":""} onchange="state.businessPlan.enabled=this.checked;if(!this.checked)state._bpAutoLoadDeclined=true;render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
         <div>
           <div style="font-size:13px;font-weight:600;color:#1a3a35">Enable Business Plan section for this report</div>
           <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a dedicated page with remodel progress, budget vs. actual, and a narrative</div>
@@ -6162,7 +6203,7 @@ function renderVestmintStep2(){
         return `<div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
           <div style="font-size:12px;font-weight:700;color:#1a3a35;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🏗️ Business Plan — ${escapeHtml(sectionLabel)}${bp._autoLoadedFrom&&bp.enabled?`<span style="font-size:10px;background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:4px;font-weight:700;margin-left:8px;text-transform:none;letter-spacing:0">↺ Loaded from ${escapeHtml(bp._autoLoadedFrom)}</span>`:""}</div>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:${bp.enabled?'14px':'0'}">
-            <input type="checkbox" ${bp.enabled?"checked":""} onchange="state['${bpKey}'].enabled=this.checked;_refreshVestmintReportHTML();render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
+            <input type="checkbox" ${bp.enabled?"checked":""} onchange="state['${bpKey}'].enabled=this.checked;if(!this.checked)state['${bpKey}']._autoLoadDeclined=true;_refreshVestmintReportHTML();render()" style="width:16px;height:16px;accent-color:#1a3a35;flex-shrink:0"/>
             <div>
               <div style="font-size:13px;font-weight:600;color:#1a3a35">Enable Business Plan page for ${escapeHtml(sectionLabel)}</div>
               <div style="font-size:11px;color:#5a8070;margin-top:1px">Adds a page with ${subtitleParts}</div>
@@ -7003,7 +7044,15 @@ function tryAutoLoadPriorBusinessPlan(){
   const name=isInv?state.investmentName:state.propertyName;
   if(!name||!state.currentQuarter) return false;
   const bp=state.businessPlan||{};
-  if(bp.enabled||bp.launchRentPerUnit||bp.bpLaunchRentParsed||bp.totalBudget) return false;
+  // Pristine = NOTHING differs from a fresh BP (audit 2026-07-23 M-3): the old
+  // guard checked only four fields but the loader REPLACES the whole object,
+  // so a block holding just capex-import results / spent-to-date / narrative
+  // (with the checkbox off) could be silently wiped. An explicit uncheck by
+  // the user also blocks the loader — no springback loop.
+  if(state._bpAutoLoadDeclined) return false;
+  const _freshBp=makeFreshBusinessPlan();
+  const _bpDirty=Object.keys(_freshBp).some(k=>JSON.stringify(bp[k]===undefined?_freshBp[k]:bp[k])!==JSON.stringify(_freshBp[k]));
+  if(_bpDirty) return false;
   const key=findPrevQuarterSaveKeyFor(name,isInv);
   if(!key) return false;
   try{
@@ -7034,7 +7083,13 @@ function tryAutoLoadVestmintBp(bpKey){
   if(state.source!=='vestmint') return false;
   const bp=state[bpKey];
   if(!bp) return false;
-  if(bp.enabled||bp.totalBudget||bp.spentToDate||bp.unitsCompleted||bp.rentAtPurchase) return false;
+  // Dirty = any user-facing field set, a prior auto-load already applied, an
+  // explicit user dismissal, or a previous scan that found nothing (perf: no
+  // per-render re-parse of every save when no matching source exists).
+  // rentCurrent deliberately excluded — processInvestmentData fills it
+  // independently and must not block this loader (audit M-3 / L-4 / L-5).
+  if(bp._autoLoadDeclined||bp._autoLoadedFrom||bp._autoLoadTried) return false;
+  if(bp.enabled||bp.totalBudget||bp.spentToDate||bp.unitsCompleted||bp.unitsRemaining||bp.rentAtPurchase||(bp.narrative||"").trim()) return false;
   const pattern=bpKey==='vestmintBpGreenway'?/greenway/i:/brent/i;
   const cur=_parseQuarterLabel(state.currentQuarter||"");
   let best=null,bestRank=-1;
@@ -7051,7 +7106,7 @@ function tryAutoLoadVestmintBp(bpKey){
       if(rank>bestRank){ bestRank=rank; best=d; }
     }
   }catch(e){ console.warn('tryAutoLoadVestmintBp scan failed:',e); }
-  if(!best) return false;
+  if(!best){ bp._autoLoadTried=true; return false; }  // cache the negative — no per-render rescans (L-5)
   const sbp=best.businessPlan;
   state[bpKey]={...bp,
     enabled:true,
@@ -7612,6 +7667,12 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
       // classic format's active section header. Rows with no account info land
       // in a generic bucket so the account view's total still matches.
       const glVal = String(colGL>=0&&row[colGL]!=null ? row[colGL] : "").trim();
+      // Month-format insurance (audit L-9): these exports are ASSUMED pre-filtered
+      // to capex accounts. If a full-ledger export sneaks in with the same banner,
+      // skip rows whose own GL account clearly isn't capital expenditure — without
+      // this, allDates mode would count the property's entire ledger into
+      // "Spent to Date".
+      if(isAFGLMonthFormat && glVal && !/capital\s*expend|capex/i.test(glVal)) continue;
       const acctRaw = glVal || currentAccount || "";
       if(acctRaw) hasAcctInfo = true;
       const acctName = acctRaw ? _cleanCapexAcct(acctRaw) : "Other Capital Expenditures";
@@ -7871,6 +7932,20 @@ function tryAutoFillPropertyName(csvText){
 let _lastErrCtx=null;
 let _preserveErrorsOnce=false;
 function preserveErrorsThroughNextRender(){ _preserveErrorsOnce=true; }
+// Shared context-aware clear: erase lingering errors ONLY when the view context
+// (step/source/home) changes, honoring _preserveErrorsOnce so processor warnings
+// survive their step transition. Used by ALL THREE render paths — the Jul-14 fix
+// originally covered only single-property mode, so investment/VestMint warnings
+// ("N properties skipped…") still vanished one frame after appearing (audit
+// 2026-07-23 M-1 / pattern P-2).
+function _maybeClearErrorsOnCtxChange(){
+  const ctx=String(state.step)+"|"+String(state.source)+"|"+String(state.showHome);
+  if(ctx!==_lastErrCtx){
+    if(_preserveErrorsOnce) _preserveErrorsOnce=false;
+    else clearError();
+  }
+  _lastErrCtx=ctx;
+}
 function showError(msg){
   const el=document.getElementById("error-box");
   if(!msg){ el.textContent=""; el.style.display="none"; return; }
@@ -7997,7 +8072,7 @@ function render(){
     const si=document.getElementById("steps-indicator");
     const INV_STEPS=["Setup & Upload","Review Metrics","Generate Report"];
     si.innerHTML=INV_STEPS.map((s,i)=>`<div class="step"><div class="step-circle ${i<state.step?"done":i===state.step?"active":""}">${i<state.step?"✓":i+1}</div><div class="step-label ${i===state.step?"active":""}">${s}</div></div>`).join("");
-    clearError();
+    _maybeClearErrorsOnCtxChange();  // context-aware (audit 2026-07-23 M-1) — was unconditional clearError()
     if(state.step===0){renderInvestmentStep0();return;}
     if(state.step===1 && !state.invMetrics){
       const el=document.getElementById("step-content");
@@ -8135,7 +8210,7 @@ function render(){
     const si=document.getElementById("steps-indicator");
     const VM_STEPS=["Setup & Upload","Review Metrics","Generate Report"];
     si.innerHTML=VM_STEPS.map((s,i)=>`<div class="step"><div class="step-circle ${i<state.step?"done":i===state.step?"active":""}">${i<state.step?"✓":i+1}</div><div class="step-label ${i===state.step?"active":""}">${s}</div></div>`).join("");
-    clearError();
+    _maybeClearErrorsOnCtxChange();  // context-aware (audit 2026-07-23 M-1) — was unconditional clearError()
     if(state.step===0){renderInvestmentStep0();return;}
     if(state.step===1 && !state.invMetrics){
       const el=document.getElementById("step-content");
@@ -8245,12 +8320,7 @@ function render(){
   // render() immediately after showError() (audit H-2). Same-context re-renders
   // (typing, chart uploads) now leave the error box alone, and the processors set
   // _preserveErrorsOnce so their warnings survive the step-0 → step-1 transition.
-  const _errCtx=String(state.step)+"|"+String(state.source)+"|"+String(state.showHome);
-  if(_errCtx!==_lastErrCtx){
-    if(_preserveErrorsOnce) _preserveErrorsOnce=false;
-    else clearError();
-  }
-  _lastErrCtx=_errCtx;
+  _maybeClearErrorsOnCtxChange();
   // Required-file lists and the "Still needed" warning were removed — all
   // uploads are now optional, with a confirm modal (processDataWithConfirm)
   // catching accidental omissions of core files per source.
@@ -8564,7 +8634,7 @@ function render(){
           leasing:            ()=>!!(m && (m.newLeases || m.renewals || m.inquiries || m.applications || m.lossToLease)) || ['chart_lease_expirations','chart_rent_growth','chart_occupancy_rate','chart_loss_to_lease','chart_utility_income_expense'].some(k=>state.charts[k]),
           capitalImprovements:()=>!!(m && (m.capex || (m.capexItems && m.capexItems.length))),
           capexCharts:        ()=>['chart_capital_expense','chart_maintenance_expense'].some(k=>state.charts[k]),
-          loanPrincipal:      ()=>!!(state.loan && state.loan.principalInception),
+          loanPrincipal:      ()=>!!(state.loan && (state.loan.principalInception || state.loan.principalCurrent)),  // new reports only collect principalCurrent (audit M-4)
           writeoffs:          ()=>!!(state.loan && state.loan.writeoffs)
         };
         const sections = [
@@ -8712,6 +8782,16 @@ function calcNextQuarterLabel(quarter){
 // existed only in memory until the first manual save).
 function _beginNextQuarter(src,name,nextQ){
   const isInv=src==='investment'||src==='vestmint';
+  // Existing-save guard lives in the SHARED core (audit 2026-07-23 H-1 / P-1):
+  // the in-report entry point previously skipped this check, and the immediate
+  // save below would OVERWRITE a completed next-quarter report with a blank
+  // shell — permanent loss (Supabase KV has no versioning). Both entry points
+  // are now covered regardless of which button the click came from.
+  const existingKey=saveKey(name,nextQ);
+  if(dbGet(SAVE_PREFIX+existingKey)){
+    if(confirm(`A ${nextQ} report for ${name} already exists. Open it instead?`)) loadSave(existingKey);
+    return;
+  }
   selectSource(src);
   if(isInv) state.investmentName=name; else state.propertyName=name;
   state.currentQuarter=nextQ;
