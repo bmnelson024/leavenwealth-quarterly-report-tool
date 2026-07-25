@@ -2505,6 +2505,21 @@ async function rewriteWithClaude(kind){
   const metrics = isInv ? state.invMetrics : state.metrics;
   if(!metrics){ showError("No metrics available — process the report first."); return; }
   state.rewritingClaude = true; render();
+  // Matched per-category expense comparison — the AUTHORITATIVE source for
+  // quarter-over-quarter expense claims in the narrative. Every category from
+  // EITHER quarter appears with BOTH values, so "absent from a truncated list"
+  // can never masquerade as "did not recur" (Grandview bug: current categories
+  // were sent as the first 8 in statement order — cutting off taxes/utilities,
+  // which AppFolio lists last — while prior categories went in unsliced).
+  const _expenseComparison=(curCats,prvCats)=>{
+    const cur=curCats||[], prv=prvCats||[];
+    if(!cur.length&&!prv.length) return null;
+    const norm=s=>String(s||"").toLowerCase().trim();
+    const map=new Map();
+    for(const c of cur) map.set(norm(c.name),{name:c.name,current:Math.round(c.amount||0),prior:0});
+    for(const p of prv){const k=norm(p.name);if(map.has(k))map.get(k).prior=Math.round(p.amount||0);else map.set(k,{name:p.name,current:0,prior:Math.round(p.amount||0)});}
+    return [...map.values()].sort((a,b)=>Math.abs(b.current-b.prior)-Math.abs(a.current-a.prior)).slice(0,12);
+  };
   // Pre-compute direction + % change so Claude never has to do arithmetic itself.
   // "direction" is the authoritative up/down label; "pctChange" is already absolute.
   const _chg = (cur, prior) => {
@@ -2531,7 +2546,16 @@ async function rewriteWithClaude(kind){
             newLeases: metrics.newLeases, renewals: metrics.renewals,
             inquiries: metrics.inquiries, applications: metrics.applications,
             propertyCount: metrics.propertyCount, totalUnits: metrics.totalUnits,
-            expenseCategories: (metrics.expenseCategories||[]).slice(0,8).map(c=>({name:c.name,amount:c.amount})),
+            // Top categories BY AMOUNT (was: first 8 in statement order, which cut
+            // off taxes/utilities — AppFolio lists them last — while the prior
+            // quarter's list went in unsliced; Claude read the asymmetry as
+            // "Property Tax did not recur this quarter" for costs that DID recur).
+            expenseCategories: (metrics.expenseCategories||[]).slice().sort((a,b)=>Math.abs(b.amount||0)-Math.abs(a.amount||0)).slice(0,10).map(c=>({name:c.name,amount:c.amount})),
+            // Matched per-category comparison — the AUTHORITATIVE source for
+            // quarter-over-quarter expense claims. Every category from either
+            // quarter appears with BOTH values, so "absent from a list" can
+            // never masquerade as "did not recur". Top 12 by absolute change.
+            expenseComparison: _expenseComparison(metrics.expenseCategories, state.invPrevMetrics&&state.invPrevMetrics.expenseCategories),
             propertyMetrics: (metrics.propertyMetrics||[]).map(p=>({
               name:p.name, totalIncome:p.totalIncome, totalExpense:p.totalExpense,
               noi:p.noi, unitCount:p.unitCount,
@@ -2556,7 +2580,8 @@ async function rewriteWithClaude(kind){
             })),
             capex: metrics.capex||0,
           },
-          prevMetrics: state.invPrevMetrics || null,
+          // Prior categories stripped — pairwise truth lives in expenseComparison.
+          prevMetrics: state.invPrevMetrics ? {...state.invPrevMetrics, expenseCategories:undefined} : null,
           precomputedChanges: (() => {
             const p = state.invPrevMetrics;
             if(!p) return null;
@@ -2586,7 +2611,12 @@ async function rewriteWithClaude(kind){
             inquiries: metrics.inquiries, applications: metrics.applications,
             capex: metrics.capex||0, cashOnHand: metrics.cashOnHand||0,
             capexItems: (metrics.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount})),
-            expenseCategories: (metrics.expenseCategories||[]).slice(0,12).map(c=>({name:c.name,amount:c.amount})),
+            // Top categories BY AMOUNT + matched pairwise comparison — see the
+            // investment block's notes; identical fix for the single-property
+            // payload (this is the one the Grandview false "did not recur"
+            // narrative came from).
+            expenseCategories: (metrics.expenseCategories||[]).slice().sort((a,b)=>Math.abs(b.amount||0)-Math.abs(a.amount||0)).slice(0,10).map(c=>({name:c.name,amount:c.amount})),
+            expenseComparison: _expenseComparison(metrics.expenseCategories, state.prevMetrics&&state.prevMetrics.expenseCategories),
             // capexDetail: project-level context filtered to current quarter only.
             // topTransactions are filtered by parsed date so Claude only narrates
             // capital work that actually happened this quarter.
@@ -2619,7 +2649,10 @@ async function rewriteWithClaude(kind){
           prevMetrics: state.prevMetrics ? {
             totalIncome: state.prevMetrics.income, totalExpense: state.prevMetrics.expenses,
             noi: state.prevMetrics.noi, capex: state.prevMetrics.capex, occupancy: state.prevMetrics.occupancy,
-            expenseCategories: (state.prevMetrics.expenseCategories||[]).map(c=>({name:c.name,amount:c.amount})),
+            // Per-category prior amounts intentionally NOT sent here — they live
+            // in expenseComparison above, matched pair-wise with current values.
+            // Sending the raw prior list alongside a truncated current list is
+            // what caused the false "did not recur" narratives.
           } : null,
           precomputedChanges: (() => {
             const p = state.prevMetrics;
