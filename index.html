@@ -2285,6 +2285,12 @@ const extractIncomeCats = incomeRows => {
 };
 // Extracts individual expense line items from an incomeRows array (not subtotals, not section headers).
 // Returns [{name, amount}] for every non-zero line item in the expense section.
+// Investor-facing rename for narrative category names: Buildium books property
+// taxes as "Mortgage Escrow Expense" — investors don't know that term, so
+// narratives call it "Property Tax Escrow" (Brian, Jul 2026). Applied at BOTH
+// extraction points (current + prior quarter) so the pairwise expense
+// comparison matches the renamed category to itself across quarters.
+const narrativeCategoryName = n => String(n||"").replace(/mortgage\s+escrow(\s+expenses?)?/i, "Property Tax Escrow");
 const extractExpenseCats = incomeRows => {
   let inExp=false;
   const cats=[];
@@ -2298,7 +2304,7 @@ const extractExpenseCats = incomeRows => {
        EXPENSE_NARRATIVE_EXCLUDE.has(lbl)||lbl.startsWith('net non-operating')){inExp=false;break;}
     // Skip subtotals ("Total X"), section headers, and any excluded summary labels
     if(inExp && !r.isTotal && !r.isSectionHeader && !EXPENSE_NARRATIVE_EXCLUDE.has(lbl) && Math.abs(r.amount||0)>0){
-      cats.push({name:r.label.trim(), amount:r.amount||0});
+      cats.push({name:narrativeCategoryName(r.label.trim()), amount:r.amount||0});
     }
   }
   return cats;
@@ -7483,7 +7489,7 @@ function parsePriorQuarterFromExcel(buffer, currentQuarter) {
       if(label==="capital expenditures"&&colSum!==0) prevCapex=Math.abs(colSum);
       // Individual line items only: not a "Total X" row, not a summary/NOI row
       if(inExpenseSection && !label.startsWith("total") && !EXPENSE_NARRATIVE_EXCLUDE.has(label) && Math.abs(colSum)>0){
-        prevExpenseCats.push({ name:rawLabel.trim(), amount:colSum });
+        prevExpenseCats.push({ name:narrativeCategoryName(rawLabel.trim()), amount:colSum });
       }
     }
     if(prevIncome || prevExpense) prevNoi = prevNoi || (prevIncome - prevExpense);
