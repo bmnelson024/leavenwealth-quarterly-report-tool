@@ -210,7 +210,7 @@ const VM_DORAL_PHOTO_KEY = "_vm_doral"; // Vestmint cover: Doral Apartments
 // the tool compares property names (community matching, photo lookup, etc.).
 // Add a new entry here whenever a property is known by more than one name.
 const PROPERTY_ALIASES = [
-  ["1003-1005 Ave K", "Carter Place"],
+  ["1003-1005 Ave K", "1003 - 1005 Avenue K", "Carter Place"],
   ["500 S Dakota", "The Landmark on Dakota"],
   ["The Venice", "4916 California"],
   ["321 Townhomes", "Independence 18"],
@@ -221,8 +221,17 @@ const PROPERTY_ALIASES = [
 // itself). Used to expand comparisons through the alias table.
 function getPropertyAliases(name){
   if(!name) return [];
-  const n=String(name).toLowerCase().trim();
-  const grp=PROPERTY_ALIASES.find(g=>g.some(a=>a.toLowerCase().trim()===n));
+  // Canonicalize before comparing so minor spelling drift can't defeat the
+  // alias table: lowercase, collapse whitespace, unify dash spacing
+  // ("1003 - 1005" == "1003-1005"), and abbreviate Avenue/Street/Road/Drive
+  // ("Avenue K" == "Ave K").
+  const canon=s=>String(s).toLowerCase().trim()
+    .replace(/\s*-\s*/g,"-")
+    .replace(/\s+/g," ")
+    .replace(/\bavenue\b/g,"ave").replace(/\bstreet\b/g,"st")
+    .replace(/\broad\b/g,"rd").replace(/\bdrive\b/g,"dr");
+  const n=canon(name);
+  const grp=PROPERTY_ALIASES.find(g=>g.some(a=>canon(a)===n));
   return grp||[String(name)];
 }
 // Default per-section toggle state for single-property reports. Every new
@@ -6621,7 +6630,11 @@ function loadAllBuildiumFiles(){
       // specific, and a capex export named e.g. "Transaction Detail 12 Month.xlsx"
       // would otherwise match the income statement's "12 month" term and steal
       // the income slot, pushing the real income file to unmatched.
-      if(has(base,"capex detail","capex_detail","capex","transaction detail by account","transaction_detail_by_account"))
+      // "transaction details" (plural) is how Buildium actually names the export
+      // (e.g. "… Transaction details by account Report.xlsx") — the singular-only
+      // term made bulk upload miss the capex file every time. norm() already
+      // converts underscores/hyphens to spaces, so one spelling covers all.
+      if(has(base,"capex detail","capex","transaction detail by account","transaction details by account","transaction detail","transaction details"))
         {assigned.capexDetail={file:f,asBuffer:isExcel};return;}
       if(has(base,"income statement","profit and loss","profit loss","p&l","cash flow","t12","trailing 12","12 month","12month","operating statement"))
         {assigned.income={file:f,asBuffer:isExcel};return;}
@@ -7169,7 +7182,7 @@ function onPropertyNameBlur(val){
     }
   }
   if(!state.assetFacts||Object.keys(state.assetFacts).length===0){
-    const savedFacts=loadAssetFactsForProperty(val);
+    const savedFacts=factsForPropertyWithFallback(val);  // property key, else prior-quarter save blob
     if(savedFacts){ state.assetFacts=savedFacts; render(); }
   }
   // Auto-load prior quarter occupancy once we have the full property name.
@@ -7225,6 +7238,27 @@ function loadAssetFactsForProperty(name){
     const v=dbGet(best);
     return v?JSON.parse(v):null;
   } catch(e){ return null; }
+}
+// Asset facts with fallback: the lw_assetfacts_ property key is only written
+// when a field is EDITED (onAssetFactChange), so facts that rode along in save
+// blobs without a fresh edit may not exist under the property key at all. Fall
+// back to the prior quarter's save blob, and heal the property key when found
+// there so the next lookup is direct.
+function factsForPropertyWithFallback(name){
+  let facts=loadAssetFactsForProperty(name);
+  if(!facts){
+    try{
+      const pk=findPrevQuarterSaveKeyFor(name,false);
+      if(pk){
+        const pd=JSON.parse(dbGet(SAVE_PREFIX+pk)||"null");
+        if(pd&&pd.assetFacts&&Object.keys(pd.assetFacts).length){
+          facts=pd.assetFacts;
+          saveAssetFacts(name,facts);
+        }
+      }
+    }catch(e){ console.warn('factsForPropertyWithFallback:',e); }
+  }
+  return facts;
 }
 function onAssetFactChange(field, val){
   state.assetFacts = {...(state.assetFacts||{}), [field]: val};
@@ -8801,7 +8835,7 @@ function _beginNextQuarter(src,name,nextQ){
     // Re-fire the property-scoped auto-loads that normally run on name blur.
     const savedPhoto=loadPhotoForProperty(name);
     if(savedPhoto){ state.propertyPhoto=savedPhoto; state.photoAutoLoaded=true; }
-    const facts=loadAssetFactsForProperty(name);
+    const facts=factsForPropertyWithFallback(name);
     if(facts) state.assetFacts=facts;
     tryAutoLoadPriorOccupancy();
   } else {
