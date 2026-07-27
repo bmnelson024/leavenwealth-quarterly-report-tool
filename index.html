@@ -6673,6 +6673,38 @@ function loadAllCharts(){
 // for duplicates. Base file = Month 1, (1) = Month 2, (2) = Month 3.
 // rrSuffix() extracts that number so rent rolls sort into the correct monthly slots.
 const rrSuffix=fname=>{const m=(fname||"").match(/\((\d+)\)/);return m?parseInt(m[1]):0;};
+// Reorders state.files.rr1/rr2/rr3 CHRONOLOGICALLY by each file's own "As of"
+// date, sniffed from its meta rows. Bulk upload previously assigned month slots
+// by the browser's download suffix — "(1)", "(2)" — i.e. DOWNLOAD order, so
+// exporting June→May→April silently REVERSED the quarter's monthly occupancy
+// (Judee Q2: April 96% displayed as 86% and vice versa). Only the first ~12
+// lines are scanned so lease dates in data rows can't masquerade as the report
+// date. Returns "reordered" | "ok" | "unverified" | null for the summary line.
+function _reorderRentRollsByDate(){
+  const slots=["rr1","rr2","rr3"];
+  const present=slots.filter(k=>typeof state.files[k]==="string"&&state.files[k]);
+  if(present.length<2) return null;
+  const sniff=t=>{
+    // Meta region only, with "Exported On:" lines removed so the export
+    // timestamp can never be mistaken for the report's as-of date.
+    const head=String(t).split(/\r?\n/).slice(0,12).filter(l=>!/exported/i.test(l)).join("\n");
+    let m=head.match(/as\s*of[:\s]+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i);
+    if(m) return {y:+m[3],mo:+m[1]};
+    m=head.match(/\b(0?[1-9]|1[0-2])[\/\-](\d{1,2})[\/\-](\d{4})\b/);
+    if(m) return {y:+m[3],mo:+m[1]};
+    m=head.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\w*\s+(?:\d{1,2},?\s+)?(\d{4})/i);
+    if(m){const names=["january","february","march","april","may","june","july","august","september","october","november","december"];return {y:+m[2],mo:names.indexOf(m[1].toLowerCase())+1};}
+    return null;
+  };
+  const entries=present.map(k=>({k,text:state.files[k],d:sniff(state.files[k])}));
+  if(entries.some(e=>!e.d)) return "unverified";
+  const key=d=>d.y*12+d.mo;
+  if(new Set(entries.map(e=>key(e.d))).size!==entries.length) return "unverified"; // same/dup dates — don't guess
+  const sorted=entries.slice().sort((a,b)=>key(a.d)-key(b.d));
+  const changed=sorted.some((e,i)=>e.k!==entries[i].k);
+  sorted.forEach((e,i)=>{ state.files[present[i]]=e.text; });
+  return changed?"reordered":"ok";
+}
 // Bulk-upload matcher for Buildium. Same shape as loadAllAFFiles — the user
 // picks a folder of exports from Buildium and we auto-assign files to slots
 // by filename keywords. Skips any file that doesn't match a known slot and
@@ -6759,8 +6791,13 @@ function loadAllBuildiumFiles(){
       }
     });
     function done(){
+      // Fix the month order BEFORE rendering: slots were filled in download-
+      // suffix order; this re-sorts rr1/rr2/rr3 by each file's own as-of date.
+      const rrOrder=_reorderRentRollsByDate();
       render();
       const msgs=[];
+      if(rrOrder==="reordered") msgs.push("Note: the three rent rolls were re-ordered chronologically using their 'as of' dates — they were selected in a different order.");
+      else if(rrOrder==="unverified") msgs.push("Warning: could not verify the rent rolls' month order from their contents — double-check that Month 1/2/3 occupancy matches the correct months.");
       if(unmatched.length>0) msgs.push("Matched "+matchedCount+" of "+files.length+" files. Could not auto-match: "+unmatched.join(", ")+". Upload those individually.");
       if(failed.length>0) msgs.push("Failed to read: "+failed.join(", ")+".");
       showError(msgs.join(" "));
@@ -6841,8 +6878,13 @@ function loadAllAFFiles(){
       }
     });
     function done(){
+      // Fix the month order BEFORE rendering: slots were filled in download-
+      // suffix order; this re-sorts rr1/rr2/rr3 by each file's own as-of date.
+      const rrOrder=_reorderRentRollsByDate();
       render();
       const msgs=[];
+      if(rrOrder==="reordered") msgs.push("Note: the three rent rolls were re-ordered chronologically using their 'as of' dates — they were selected in a different order.");
+      else if(rrOrder==="unverified") msgs.push("Warning: could not verify the rent rolls' month order from their contents — double-check that Month 1/2/3 occupancy matches the correct months.");
       if(unmatched.length>0) msgs.push("Matched "+matchedCount+" of "+files.length+" files. Could not auto-match: "+unmatched.join(", ")+". Upload those individually.");
       if(failed.length>0) msgs.push("Failed to read: "+failed.join(", ")+".");
       showError(msgs.join(" "));
