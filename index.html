@@ -2519,7 +2519,9 @@ async function rewriteWithClaude(kind){
   // which AppFolio lists last — while prior categories went in unsliced).
   const _expenseComparison=(curCats,prvCats)=>{
     const cur=curCats||[], prv=prvCats||[];
-    if(!cur.length&&!prv.length) return null;
+    // No prior categories → no comparison to make. Omitting the field entirely
+    // beats sending all-zero priors, which reads as "everything is new".
+    if(!cur.length||!prv.length) return null;
     const norm=s=>String(s||"").toLowerCase().trim();
     const map=new Map();
     for(const c of cur) map.set(norm(c.name),{name:c.name,current:Math.round(c.amount||0),prior:0});
@@ -4131,7 +4133,12 @@ function processInvestmentData(opts){
         // missing per-category detail so Claude's expense comparison has
         // real pairs instead of a one-sided list.
         state.invPrevMetrics.expenseCategories=derivedPrev.expenseCategories;
+        showToast("✓ Prior-quarter expense categories derived from the T12s and attached to your manual totals");
       }
+    } else if(derivedPrev&&!derivedPrev.complete&&state.invPrevMetrics&&!(state.invPrevMetrics.expenseCategories||[]).length){
+      // Withholding is deliberate (a partial prior recreates the "did not
+      // recur" asymmetry) — but it must be VISIBLE, not silent.
+      showError("Note: prior-quarter expense detail could be derived from only "+derivedPrev.propCount+" of "+_wantPrev.length+" properties' T12s, so the category-level comparison was omitted (a partial prior would misstate changes). The narrative will compare totals only.");
     }
     // Show property tax warning if any properties were missing a tax line item
     if(window._propTaxMissingProps && window._propTaxMissingProps.length>0){
