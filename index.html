@@ -3957,12 +3957,20 @@ function parsePropertyMetrics(prop){
   const avgEconOcc=_econAvgStr(prop.econOcc);
   const remodels = prop.files.capexDetail ? parseCapexDetail(prop.files.capexDetail) : null;
   // If an AppFolio GL capex file was uploaded, replace generic T12 capex items with vendor-level detail
+  // Prior-quarter slice from the SAME T12 (silent probe): each AppFolio income
+  // statement is trailing-12-month, so the prior quarter's months are already
+  // in the file. Aggregated portfolio-wide in processInvestmentData as a
+  // fallback when no prior save exists (e.g. a lost Q1 save).
+  let _prevQ=null;
+  if(prop.source==='appfolio' && prop.files.income){
+    try{ _prevQ=parsePriorQuarterFromExcel(prop.files.income, state.currentQuarter, {silent:true}); }catch(e){ _prevQ=null; }
+  }
   const _glCapex = (prop.source==='appfolio' && prop.files.capexDetail)
     ? parseAFCapexGL(prop.files.capexDetail, state.currentQuarter||"")
     : null;
   const _capexItems = (_glCapex && _glCapex.capexItems.length > 0) ? _glCapex.capexItems : capexItems;
   const _capex = (_glCapex && _glCapex.capexItems.length > 0 && !capex) ? _glCapex.totalCapex : capex;
-  return {name:prop.name,source:prop.source,occupancy,occ1,occ2,occ3,unitCount,totalIncome,totalExpense,noi,capex:_capex,capexItems:_capexItems,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:prop.source==='buildium'||!!prop.files.delinquency,newLeases,renewals,inquiries,applications,avgEconOcc,econOccMonthly:{m1:prop.econOcc&&prop.econOcc.m1||"",m2:prop.econOcc&&prop.econOcc.m2||"",m3:prop.econOcc&&prop.econOcc.m3||""},expenseCategories:propExpenseCats,incomeCategories:propIncomeCats,remodels};
+  return {name:prop.name,source:prop.source,occupancy,occ1,occ2,occ3,unitCount,totalIncome,totalExpense,noi,capex:_capex,capexItems:_capexItems,cashOnHand,lossToLease:calcLossToLease(mkt,act),monthlyRent:act,delinquency,delinquencyKnown:prop.source==='buildium'||!!prop.files.delinquency,newLeases,renewals,inquiries,applications,avgEconOcc,econOccMonthly:{m1:prop.econOcc&&prop.econOcc.m1||"",m2:prop.econOcc&&prop.econOcc.m2||"",m3:prop.econOcc&&prop.econOcc.m3||""},expenseCategories:propExpenseCats,incomeCategories:propIncomeCats,remodels,_prevQ:_prevQ||null};
 }
 // Builds the per-unit current rent map from property rent rolls.
 // Works for both directly-uploaded files and ↑ Imported properties
@@ -4072,6 +4080,27 @@ function processInvestmentData(opts){
     const portfolioExpenseCats=Object.entries(_invExpCatMap)
       .map(([name,amount])=>({name,amount}))
       .sort((a,b)=>Math.abs(b.amount)-Math.abs(a.amount));
+    // ── Derived prior quarter from the T12s themselves (Brian, Jul 2026) ────
+    // Each AppFolio income statement already contains the prior quarter's
+    // months, so when no prior save exists (e.g. a lost Q1 save) the portfolio
+    // prior can be DERIVED from the same uploads: totals + per-category
+    // expenses, aggregated across properties. Categories are used only when
+    // EVERY property with current financials contributed a prior slice —
+    // a partial prior list would recreate the false "did not recur" asymmetry.
+    const _wantPrev=results.filter(m=>(m.totalIncome||m.totalExpense));
+    const _gotPrev=results.filter(m=>m._prevQ);
+    let derivedPrev=null;
+    if(_gotPrev.length>0){
+      const _dpSum=f=>_gotPrev.reduce((s,m)=>s+(m._prevQ[f]||0),0);
+      const _dpCatMap={};
+      _gotPrev.forEach(m=>(m._prevQ.expenseCategories||[]).forEach(c=>{const k=(c.name||"").trim();if(k)_dpCatMap[k]=(_dpCatMap[k]||0)+(c.amount||0);}));
+      derivedPrev={
+        totalIncome:_dpSum('income'), totalExpense:_dpSum('expenses'), noi:_dpSum('noi'), capex:_dpSum('capex'),
+        expenseCategories:Object.entries(_dpCatMap).map(([name,amount])=>({name,amount})).sort((a,b)=>Math.abs(b.amount)-Math.abs(a.amount)),
+        complete:_gotPrev.length===_wantPrev.length && _wantPrev.length>0,
+        propCount:_gotPrev.length
+      };
+    }
     // MWP 5 supplemental income — SFH and LOC amounts added quietly to portfolio totals
     let _totalIncome=totalIncome, _totalExpense=totalExpense, _noi=noi;
     if(/mwp\s*5/i.test(state.investmentName||'') && state.suppIncome) {
@@ -4089,6 +4118,21 @@ function processInvestmentData(opts){
     // transient flag alone let corrupted ~4× metrics slip past the generation
     // gates after a resume. undefined (not false) so clean runs don't bloat saves.
     state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents,_annualFallback:(state._incomeAnnualFallback===true)||undefined};
+    state.invMetrics._derivedPrev=derivedPrev||undefined;
+    if(derivedPrev&&derivedPrev.complete){
+      if(!state.invPrevMetrics){
+        // No prior save and nothing entered manually — use the derived prior
+        // outright so the QoQ table and expense comparison aren't blank.
+        state.invPrevMetrics={totalIncome:derivedPrev.totalIncome,totalExpense:derivedPrev.totalExpense,noi:derivedPrev.noi,capex:derivedPrev.capex,expenseCategories:derivedPrev.expenseCategories};
+        state._invPrevSource='derived-from-T12s';
+        showToast("✓ Prior-quarter financials derived from the T12 income statements ("+derivedPrev.propCount+" propert"+(derivedPrev.propCount===1?"y":"ies")+")");
+      } else if(!(state.invPrevMetrics.expenseCategories||[]).length){
+        // Manually-entered prior TOTALS stay authoritative; supply only the
+        // missing per-category detail so Claude's expense comparison has
+        // real pairs instead of a one-sided list.
+        state.invPrevMetrics.expenseCategories=derivedPrev.expenseCategories;
+      }
+    }
     // Show property tax warning if any properties were missing a tax line item
     if(window._propTaxMissingProps && window._propTaxMissingProps.length>0){
       const names=window._propTaxMissingProps;
@@ -7533,7 +7577,8 @@ function parseQuarterFromExcel(buffer, currentQuarter) {
   } catch(e) { return null; }
 }
 // parsePriorQuarterFromExcel: Extracts PRIOR quarter metrics from a 12-month income statement.
-function parsePriorQuarterFromExcel(buffer, currentQuarter) {
+function parsePriorQuarterFromExcel(buffer, currentQuarter, opts) {
+  const _silent=!!(opts&&opts.silent);  // per-property fallback probes must not spam warnings
   // Inception reports have no prior quarter — skip silently.
   if(state.isInceptionReport) return null;
   try {
@@ -7549,7 +7594,7 @@ function parsePriorQuarterFromExcel(buffer, currentQuarter) {
       if(hits.length >= 3){ headerRowIdx=i; monthCols=hits.map(({c,idx})=>({label:c,colIdx:idx})); break; }
     }
     if(headerRowIdx<0 || monthCols.length<3){
-      showError("Warning: Prior quarter comparison — could not find month column headers in the income statement. Prior quarter data will be blank. Make sure the uploaded file is a trailing 12-month income statement.");
+      if(!_silent) showError("Warning: Prior quarter comparison — could not find month column headers in the income statement. Prior quarter data will be blank. Make sure the uploaded file is a trailing 12-month income statement.");
       return null;
     }
     // Identify current quarter months
@@ -7574,7 +7619,7 @@ function parsePriorQuarterFromExcel(buffer, currentQuarter) {
     }).filter(v=>v!==null);
     if(prevColIdxs.length < 3){
       const foundLabels = monthCols.slice(0,6).map(c=>c.label).join(", ")+(monthCols.length>6?" ...":"");
-      showError("Warning: Prior quarter columns ("+expectedMonths+") not found in income statement. Columns found: "+foundLabels+". Prior quarter comparison will be blank. Verify the trailing 12-month file covers the prior quarter period.");
+      if(!_silent) showError("Warning: Prior quarter columns ("+expectedMonths+") not found in income statement. Columns found: "+foundLabels+". Prior quarter comparison will be blank. Verify the trailing 12-month file covers the prior quarter period.");
       return null;
     }
     // Sum prior quarter values for key rows
