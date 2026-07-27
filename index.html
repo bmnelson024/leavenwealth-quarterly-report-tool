@@ -5498,7 +5498,7 @@ function renderInvestmentStep0(){
       </div>
       ${prop.source?`
       <div class="section-label" style="margin-top:8px">${prop.source==='appfolio'?"AppFolio":"Buildium"} Reports</div>
-      ${invFileRow(prop.id,"income","Income Statement (12-Month)","12-month Excel for prior quarter comparison",true)}
+      ${invFileRow(prop.id,"income","Income Statement (12-Month)"+_pteBadge(prop.name),"12-month Excel for prior quarter comparison",true)}
       ${(()=>{const mo=getQMonths(q);return invFileRow(prop.id,"rr1","Rent Roll — End of "+mo[0],"Pull at end of month",'text')+invFileRow(prop.id,"rr2","Rent Roll — End of "+mo[1],"Pull at end of month",'text')+invFileRow(prop.id,"rr3","Rent Roll — End of "+mo[2],"Pull at end of month",'text');})()}
       ${prop.source==='appfolio'?`
         ${invFileRow(prop.id,"leasingSummary","Leasing Summary","Quarter leasing summary",'text')}
@@ -7334,6 +7334,26 @@ function factsForPropertyWithFallback(name){
   }
   return facts;
 }
+// "Prop Tax Not Escrowed" reminder badge (Brian, Jul 2026): these properties
+// don't escrow property taxes, so the T12 needs a manual property-tax line
+// before upload. Hardcoded list by request; matching goes through
+// communityMatches so name variants and the PROPERTY_ALIASES table apply
+// (e.g. "Grandview Apartments" hits "Grandview"; any Maple Park / Enclave
+// variant hits via its alias group). UI-only — never printed in reports.
+const PROP_TAX_NOT_ESCROWED = [
+  "Heston Pointe", "The Todd", "Villa Blanca", "College Heights",
+  "Tall Oaks", "Grandview", "Maple Park", "The Enclave",
+  "The Beverly", "The Cass",
+];
+function isPropTaxNotEscrowed(name){
+  if(!name) return false;
+  try{ return PROP_TAX_NOT_ESCROWED.some(p=>communityMatches(p,name)); }catch(e){ return false; }
+}
+function _pteBadge(name){
+  return isPropTaxNotEscrowed(name)
+    ? ` <span style="background:#fef3c7;border:1px solid #fcd34d;color:#92400e;font-size:10px;font-weight:800;padding:1px 7px;border-radius:4px;margin-left:6px;vertical-align:middle">⚠ PROP TAX NOT ESCROWED</span>`
+    : "";
+}
 function onAssetFactChange(field, val){
   state.assetFacts = {...(state.assetFacts||{}), [field]: val};
   saveAssetFacts(state.propertyName, state.assetFacts);
@@ -8649,7 +8669,7 @@ function render(){
         <button class="upload-btn" style="white-space:nowrap;padding:8px 14px" onclick="loadAllBuildiumFiles()">📂 Upload All Reports</button>
       </div>`;
       })()}
-      ${fileRow("income","Income Statement (12-Month)","Upload a 12-month statement for prior quarter comparison",true)}
+      ${fileRow("income","Income Statement (12-Month)"+_pteBadge(state.propertyName),"Upload a 12-month statement for prior quarter comparison",true)}
       ${/brent\s*village/i.test(state.propertyName||'')?fileRow("balanceSheet","Balance Sheet <span style='background:#e0f2fe;color:#0369a1;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:4px'>Optional</span>","Balance sheet as of end of quarter — adds a Balance Sheet page to the report",true):""}
       ${rrSection}
       ${fileRow("leasing","Leasing Agent Report","Jan 1 – Mar 24, 2026",'text')}
@@ -8673,7 +8693,7 @@ function render(){
         </div>
         <button class="upload-btn" style="white-space:nowrap;padding:8px 14px" onclick="loadAllAFFiles()">📂 Upload All Reports</button>
       </div>
-      ${fileRow("income","Income Statement (12-Month)","Upload a 12-month statement for prior quarter comparison",true)}
+      ${fileRow("income","Income Statement (12-Month)"+_pteBadge(state.propertyName),"Upload a 12-month statement for prior quarter comparison",true)}
       ${rrSection}
       ${fileRow("leasingSummary","Leasing Summary","Leasing Summary report for the quarter",'text')}
       ${fileRow("renewalSummary","Renewal Summary","Renewal Summary report for the quarter",'text')}
