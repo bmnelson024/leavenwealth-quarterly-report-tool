@@ -6663,6 +6663,7 @@ function loadAllCharts(){
       if(unmatched.length>0) msgs.push("Could not match "+unmatched.length+" file(s): "+unmatched.join(", ")+". Check filenames and try uploading manually.");
       if(failed.length>0) msgs.push("Failed to read "+failed.length+" file(s): "+failed.join(", ")+". The file may be corrupt or inaccessible.");
       showError(msgs.join(" "));
+      if(msgs.length){ try{ const _eb=document.getElementById("error-box"); if(_eb) _eb.scrollIntoView({behavior:"smooth",block:"center"}); }catch(_e){} }
     }
   };
   inp.click();
@@ -6673,6 +6674,31 @@ function loadAllCharts(){
 // for duplicates. Base file = Month 1, (1) = Month 2, (2) = Month 3.
 // rrSuffix() extracts that number so rent rolls sort into the correct monthly slots.
 const rrSuffix=fname=>{const m=(fname||"").match(/\((\d+)\)/);return m?parseInt(m[1]):0;};
+// Month parsed from a rent-roll FILENAME (e.g. "Judee Estates Apr 26 Rent Roll").
+// Returns yr*12+mo or null. Used to sort the three bulk-uploaded rent rolls
+// chronologically when the filenames carry months — a far stronger signal than
+// the browser's download suffix or the file-picker's selection order.
+const rrMonthFromName=fname=>{
+  const s=String(fname||"").toLowerCase();
+  const names=["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  let m=s.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*[,\s-]?\s*(\d{2}|\d{4})\b/);
+  if(m){const yr=+m[2]<100?2000+ +m[2]:+m[2];return yr*12+names.indexOf(m[1])+1;}
+  m=s.match(/\b(\d{4})[.\/-](0?[1-9]|1[0-2])\b/);          // 2026-04
+  if(m) return +m[1]*12+ +m[2];
+  m=s.match(/\b(0?[1-9]|1[0-2])[.\/-](\d{4})\b/);          // 04-2026
+  if(m) return +m[2]*12+ +m[1];
+  return null;
+};
+// Sort helper for the three rent-roll files: filename month (when ALL files
+// carry distinct ones) wins; otherwise fall back to the download-suffix order.
+const sortRentRollFiles=rrFiles=>{
+  const months=rrFiles.map(f=>rrMonthFromName(f.name));
+  if(rrFiles.length>=2&&months.every(m=>m!=null)&&new Set(months).size===rrFiles.length){
+    rrFiles.sort((a,b)=>rrMonthFromName(a.name)-rrMonthFromName(b.name));
+  }else{
+    sortRentRollFiles(rrFiles);
+  }
+};
 // Reorders state.files.rr1/rr2/rr3 CHRONOLOGICALLY by each file's own "As of"
 // date, sniffed from its meta rows. Bulk upload previously assigned month slots
 // by the browser's download suffix — "(1)", "(2)" — i.e. DOWNLOAD order, so
@@ -6680,23 +6706,40 @@ const rrSuffix=fname=>{const m=(fname||"").match(/\((\d+)\)/);return m?parseInt(
 // (Judee Q2: April 96% displayed as 86% and vice versa). Only the first ~12
 // lines are scanned so lease dates in data rows can't masquerade as the report
 // date. Returns "reordered" | "ok" | "unverified" | null for the summary line.
+// As-of dates captured from RAW rent-roll files at read time, keyed rr1/rr2/rr3.
+// Reset by each bulk loader before reading.
+let _rrSniffedDates={};
+// Reads the as-of date from a rent roll xlsx BUFFER's meta rows — must run
+// before xlsxToText, which discards everything above the column header.
+function xlsxAsOfFromBuffer(buffer){
+  try{
+    const wb=XLSX.read(buffer,{type:"array"});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false}).slice(0,12);
+    const head=rows.map(r=>r.join(",")).join("\n").split(/\r?\n/).filter(l=>!/exported/i.test(l)).join("\n");
+    const m=head.match(/as\s*of[:\s]+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i);
+    return m?{y:+m[3],mo:+m[1]}:null;
+  }catch(e){ return null; }
+}
 function _reorderRentRollsByDate(){
   const slots=["rr1","rr2","rr3"];
   const present=slots.filter(k=>typeof state.files[k]==="string"&&state.files[k]);
   if(present.length<2) return null;
+  // Prefer the date captured from the RAW file at read time (_rrSniffedDates):
+  // xlsxToText strips all meta rows above the column header, so "As of …" never
+  // survives into the stored text of converted xlsx files. The text fallback
+  // covers CSV uploads whose meta rows DO survive. There is deliberately NO
+  // bare-date fallback — the first date in post-conversion text is a tenant's
+  // LEASE date, which is unrelated to the report month.
   const sniff=t=>{
-    // Meta region only, with "Exported On:" lines removed so the export
-    // timestamp can never be mistaken for the report's as-of date.
     const head=String(t).split(/\r?\n/).slice(0,12).filter(l=>!/exported/i.test(l)).join("\n");
     let m=head.match(/as\s*of[:\s]+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i);
-    if(m) return {y:+m[3],mo:+m[1]};
-    m=head.match(/\b(0?[1-9]|1[0-2])[\/\-](\d{1,2})[\/\-](\d{4})\b/);
     if(m) return {y:+m[3],mo:+m[1]};
     m=head.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\w*\s+(?:\d{1,2},?\s+)?(\d{4})/i);
     if(m){const names=["january","february","march","april","may","june","july","august","september","october","november","december"];return {y:+m[2],mo:names.indexOf(m[1].toLowerCase())+1};}
     return null;
   };
-  const entries=present.map(k=>({k,text:state.files[k],d:sniff(state.files[k])}));
+  const entries=present.map(k=>({k,text:state.files[k],d:(_rrSniffedDates&&_rrSniffedDates[k])||sniff(state.files[k])}));
   if(entries.some(e=>!e.d)) return "unverified";
   const key=d=>d.y*12+d.mo;
   if(new Set(entries.map(e=>key(e.d))).size!==entries.length) return "unverified"; // same/dup dates — don't guess
@@ -6717,6 +6760,7 @@ function loadAllBuildiumFiles(){
   inp.onchange=e=>{
     const files=Array.from(e.target.files);
     if(!files.length) return;
+    _rrSniffedDates={};  // fresh per bulk-upload run
     // Normalise: split camelCase, underscores/hyphens→spaces, lowercase.
     // e.g. "IncomeStatement" → "income statement", "RentEngine" → "rent engine"
     const norm=s=>s.replace(/([a-z])([A-Z])/g,"$1 $2").replace(/[_\-]/g," ").toLowerCase();
@@ -6759,7 +6803,7 @@ function loadAllBuildiumFiles(){
         {assigned.delinquency={file:f,asBuffer:'text'};return;}
       unmatched.push(f.name);
     });
-    rrFiles.sort((a,b)=>rrSuffix(a.name)-rrSuffix(b.name));
+    sortRentRollFiles(rrFiles);
     rrFiles.forEach((f,i)=>{
       if(i<3) assigned[["rr1","rr2","rr3"][i]]={file:f,asBuffer:'text'};
       else unmatched.push(f.name);
@@ -6780,7 +6824,7 @@ function loadAllBuildiumFiles(){
       const fail=()=>{ failed.push(file.name); pending--; if(pending===0) done(); };
       if(asBuffer==='text' && isXL){
         const r=new FileReader();
-        r.onload=ev=>finish(xlsxToText(ev.target.result));
+        r.onload=ev=>{ if(/^rr[123]$/.test(key)) _rrSniffedDates[key]=xlsxAsOfFromBuffer(ev.target.result); finish(xlsxToText(ev.target.result)); };
         r.onerror=fail;
         r.readAsArrayBuffer(file);
       } else {
@@ -6801,6 +6845,7 @@ function loadAllBuildiumFiles(){
       if(unmatched.length>0) msgs.push("Matched "+matchedCount+" of "+files.length+" files. Could not auto-match: "+unmatched.join(", ")+". Upload those individually.");
       if(failed.length>0) msgs.push("Failed to read: "+failed.join(", ")+".");
       showError(msgs.join(" "));
+      if(msgs.length){ try{ const _eb=document.getElementById("error-box"); if(_eb) _eb.scrollIntoView({behavior:"smooth",block:"center"}); }catch(_e){} }
     }
   };
   inp.click();
@@ -6813,6 +6858,7 @@ function loadAllAFFiles(){
   inp.onchange=e=>{
     const files=Array.from(e.target.files);
     if(!files.length) return;
+    _rrSniffedDates={};  // fresh per bulk-upload run
     // Normalise: split camelCase, underscores/hyphens→spaces, lowercase.
     // e.g. "RentEngine_PropertyPerformance" → "rent engine property performance"
     const norm=s=>s.replace(/([a-z])([A-Z])/g,"$1 $2").replace(/[_\-]/g," ").toLowerCase();
@@ -6841,7 +6887,7 @@ function loadAllAFFiles(){
       unmatched.push(f.name);
     });
     // Sort rent rolls: base file (no suffix, =0) → rr1, (1) → rr2, (2) → rr3
-    rrFiles.sort((a,b)=>rrSuffix(a.name)-rrSuffix(b.name));
+    sortRentRollFiles(rrFiles);
     rrFiles.forEach((f,i)=>{
       if(i<3) assigned[["rr1","rr2","rr3"][i]]={file:f,asBuffer:'text'};
       else unmatched.push(f.name);
@@ -6867,7 +6913,7 @@ function loadAllAFFiles(){
       };
       if(asBuffer==='text' && isXL){
         const r=new FileReader();
-        r.onload=ev=>finish(xlsxToText(ev.target.result));
+        r.onload=ev=>{ if(/^rr[123]$/.test(key)) _rrSniffedDates[key]=xlsxAsOfFromBuffer(ev.target.result); finish(xlsxToText(ev.target.result)); };
         r.onerror=fail;
         r.readAsArrayBuffer(file);
       } else {
@@ -6888,6 +6934,7 @@ function loadAllAFFiles(){
       if(unmatched.length>0) msgs.push("Matched "+matchedCount+" of "+files.length+" files. Could not auto-match: "+unmatched.join(", ")+". Upload those individually.");
       if(failed.length>0) msgs.push("Failed to read: "+failed.join(", ")+".");
       showError(msgs.join(" "));
+      if(msgs.length){ try{ const _eb=document.getElementById("error-box"); if(_eb) _eb.scrollIntoView({behavior:"smooth",block:"center"}); }catch(_e){} }
     }
   };
   inp.click();
