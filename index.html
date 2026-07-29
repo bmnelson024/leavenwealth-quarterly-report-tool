@@ -739,7 +739,7 @@ function _makeDefaultState(){
     isInceptionReport: false, // true = first quarter for this property; suppresses QoQ warnings & adjusts narrative
     cashOnHandInput: "",      // manual Cash on Hand entry — Brian pulls this from internal sources
     businessPlan: makeFreshBusinessPlan(),
-    invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false },
+    invSections: { loanPrincipal:true, writeoffs:true, financialCharts:true, leasingSection:true, businessPlan:false, additionalCommentary:false },
     _bpRentRefreshing: false, // guards the auto-refresh timeout in the Business Plan unit rent table
     invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
     // ── VestMint Fund mode state ──
@@ -962,7 +962,7 @@ function saveProgress(options){
     loan:state.loan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invLoan:state.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
     invPrevMetrics:state.invPrevMetrics||null,
-    invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
+    invSections:state.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false,additionalCommentary:false},
     hasProForma:state.hasProForma!==false,
     invHasProForma:state.invHasProForma!==false,
     businessPlan:{...makeFreshBusinessPlan(),...(state.businessPlan||{})},
@@ -1227,7 +1227,7 @@ async function loadSave(key){
       loan:data.loan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invLoan:data.invLoan||{principalInception:"",principalInceptionDate:"",principalCurrent:"",principalCurrentDate:"",writeoffs:""},
       invPrevMetrics:data.invPrevMetrics||null,
-      invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false},
+      invSections:data.invSections||{loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false,additionalCommentary:false},
       hasProForma:data.hasProForma!==false,
       invHasProForma:data.invHasProForma!==false,
       // Spread makeFreshBusinessPlan() first so any fields added after a save
@@ -1517,7 +1517,7 @@ function selectSource(src){
   state.invReportHTML = null;
   state.invNarratives = {income:"",expenses:"",capex:"",outlook:""};
   state.invNarrativesEdited = false;
-  state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false};
+  state.invSections = {loanPrincipal:true,writeoffs:true,financialCharts:true,leasingSection:true,businessPlan:false,additionalCommentary:false};
   state.businessPlan = makeFreshBusinessPlan();
   state._bpAutoLoadedFrom = null;
   state._bpAutoLoadDeclined = false;    // fresh report — carry-forward allowed again (M-3)
@@ -4516,7 +4516,9 @@ ${(()=>{
   return page2+page2b;
 })()}
 ${(()=>{
-  if(!/bg\s*champion/i.test(invName||'')) return '';
+  // Renders when the visible toggle is on OR the legacy BG Champion name match
+  // applies — and only if there's actual content.
+  if(!(sec.additionalCommentary||/bg\s*champion/i.test(invName||''))) return '';
   const bgc=state.bgChampionCustom||{};
   const commentary=(bgc.commentary||'').trim();
   const charts=Array.isArray(bgc.charts)?bgc.charts:[];
@@ -5593,7 +5595,7 @@ function renderInvestmentStep0(){
     <div class="econ-box" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">${state.source==='vestmint'?'Fund Name':'Investment Name'}</label>
         <input type="text" placeholder="${state.source==='vestmint'?'e.g. VestMint Fund':'e.g. MWP 4'}" value="${escapeHtml(state.investmentName)}"
-          oninput="state.investmentName=this.value;var _s=document.getElementById('mwp5-suppincome');if(_s)_s.style.display=/mwp\s*5/i.test(this.value)?'block':'none';var _b=document.getElementById('bgchampion-custom');if(_b)_b.style.display=/bg\s*champion/i.test(this.value)?'block':'none'"
+          oninput="state.investmentName=this.value;var _s=document.getElementById('mwp5-suppincome');if(_s)_s.style.display=/mwp\s*5/i.test(this.value)?'block':'none';var _b=document.getElementById('bgchampion-custom');if(_b&&/bg\s*champion/i.test(this.value))_b.style.display='block'"
           style="width:100%;padding:8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/></div>
       <div><label style="font-size:12px;font-weight:600;color:#1a3a35;display:block;margin-bottom:4px">Current Quarter</label>
         <input type="text" placeholder="e.g. Q1 2026" value="${escapeHtml(state.currentQuarter)}"
@@ -5889,7 +5891,16 @@ function renderInvestmentStep0(){
         </div>`).join("")}
       </div>
     </div>
-    <div id="bgchampion-custom" style="display:${/bg\s*champion/i.test(state.investmentName||'')?'block':'none'};background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;margin-bottom:16px">
+    ${""/* Additional Commentary is now toggled by a VISIBLE checkbox rather than
+          only by an investment name containing "BG Champion" — the magic-name
+          gate made the section unreachable after resume when the name didn't
+          match (Boulder Pointe & Bancroft Place report, Jul 2026). The name
+          match still auto-shows it for back-compat with old BG Champion saves. */}
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer">
+      <input type="checkbox" ${(state.invSections.additionalCommentary||/bg\s*champion/i.test(state.investmentName||''))?"checked":""} onchange="state.invSections.additionalCommentary=this.checked;render()" style="accent-color:#1a3a35;width:14px;height:14px;flex-shrink:0"/>
+      <span style="font-size:12px;font-weight:600;color:#1a3a35">Include Additional Commentary section <span style="font-weight:400;font-size:11px;color:#9ca3af">— extra summary text plus screenshots/PDF-page images, rendered as its own report pages</span></span>
+    </label>
+    <div id="bgchampion-custom" style="display:${(state.invSections.additionalCommentary||/bg\s*champion/i.test(state.investmentName||''))?'block':'none'};background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;margin-bottom:16px">
       <div style="font-weight:700;font-size:13px;color:#1e40af;margin-bottom:4px">BG Champion — Additional Commentary &amp; Charts</div>
       <div style="font-size:11px;color:#3b82f6;margin-bottom:12px">This section appears after the narratives in the printed report. Add custom commentary and upload PNG charts — one at a time, no limit.</div>
       <div style="margin-bottom:12px">
