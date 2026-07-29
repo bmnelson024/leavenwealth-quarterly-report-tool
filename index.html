@@ -2891,11 +2891,12 @@ body{font-family:Georgia,serif;background:var(--cream);color:var(--text);}
   <div class="quarter">${qtr.replace(/Q(\d)/i,"Q$1").replace(/\s*(\d{4})/," · $1")}</div>
   <div class="divider"></div>
   <h1>${prop}</h1>
-  ${""/* Cover photo shows at its NATURAL aspect ratio (was: fixed 480×280 with
-        object-fit:cover, which cropped ~25% off a typical 4:3 photo and made it
-        look zoomed-in). Width fixed at 480, height follows the photo; only an
-        unusually tall image gets bottom-cropped at the 400px cap. */}
-  ${photo?`<div style="width:480px;max-height:400px;border-radius:12px;overflow:hidden;margin-top:36px;"><img src="${photo}" style="width:100%;height:auto;display:block;border:none;outline:none;" alt="${prop}"/></div>`:""}
+  ${""/* Cover photo: the WHOLE image always shows, at its natural aspect ratio,
+        fitted within a 480-wide × 400-tall box. Landscape photos use the full
+        width; tall/square photos (e.g. Langston) shrink in width instead of
+        being bottom-cropped — the earlier fixed-width version still cropped
+        those and read as "zoomed in". No object-fit, no overflow cropping. */}
+  ${photo?`<div style="margin-top:36px;"><img src="${photo}" style="max-width:480px;max-height:400px;width:auto;height:auto;display:block;border:none;outline:none;border-radius:12px;" alt="${prop}"/></div>`:""}
 </div>
 ${(()=>{
   // Summary narrative pagination. Two-tier rule:
