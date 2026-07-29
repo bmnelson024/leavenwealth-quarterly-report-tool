@@ -203,7 +203,9 @@ const LARGE_KEY_PREFIXES = [
 ];
 const VM_LLS_PHOTO_KEY   = "_vm_lls";   // Vestmint cover: Liquid Lending Solutions
 const VM_RFF_PHOTO_KEY   = "_vm_rff";   // Vestmint cover: Real Freedom Fund
-const VM_DORAL_PHOTO_KEY = "_vm_doral"; // Vestmint cover: Doral Apartments
+// VM_DORAL_PHOTO_KEY retired (Brian, Jul 2026): Doral Apartments is now a
+// regular fund property — its cover photo flows through the standard
+// per-property photo store, not the hardcoded Fund Entities row.
 // ─── PROPERTY ALIASES ────────────────────────────────────────────────────────
 // Each inner array is a group of equivalent names for the same property.
 // Aliases are matched case-insensitively and checked bidirectionally wherever
@@ -478,7 +480,7 @@ async function supaFetchLargeKeysForSave(saveKey){
     // VestMint cover photos are global (not save-key-scoped) but must be in cache
     // before the report renders. Fetching them here guarantees they arrive even if
     // supaBootstrap hasn't finished yet when the user opens the save.
-    photoStorageKey(VM_LLS_PHOTO_KEY), photoStorageKey(VM_RFF_PHOTO_KEY), photoStorageKey(VM_DORAL_PHOTO_KEY)
+    photoStorageKey(VM_LLS_PHOTO_KEY), photoStorageKey(VM_RFF_PHOTO_KEY)
   ];
   // Only fetch keys not already in cache
   const missing = keysToFetch.filter(k=>!Object.prototype.hasOwnProperty.call(_dbCache,k));
@@ -5141,16 +5143,16 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // Fund entity photos for second row (Liquid Lending Solutions + Real Freedom Fund)
   const llsPhoto=loadPhotoForProperty(VM_LLS_PHOTO_KEY);
   const rffPhoto=loadPhotoForProperty(VM_RFF_PHOTO_KEY);
-  const doralPhoto=loadPhotoForProperty(VM_DORAL_PHOTO_KEY);
   const fundEntityPhotos=[
     {name:"Liquid Lending Solutions",photo:llsPhoto},
-    {name:"Real Freedom Fund",photo:rffPhoto},
-    {name:"Doral Apartments",photo:doralPhoto}
+    {name:"Real Freedom Fund",photo:rffPhoto}
   ].filter(p=>p.photo);
-  const fundThumbW=220,fundThumbH=Math.round(fundThumbW*0.62);
+  // Fund-entity thumbnails now match the property thumbnails exactly (190×124,
+  // same crop ratio) so every photo on the cover is a uniform size — previously
+  // the entity row rendered larger (220px) with a slightly different ratio.
   const fundEntityRow=fundEntityPhotos.length===0?""
-    :`<div style="margin-top:16px;display:flex;gap:20px;justify-content:center">
-        ${fundEntityPhotos.map(p=>photoThumb(p,fundThumbW,fundThumbH)).join("")}
+    :`<div style="margin-top:16px;display:flex;gap:16px;justify-content:center">
+        ${fundEntityPhotos.map(p=>photoThumb(p)).join("")}
       </div>`;
   const propNamesHtml=state.invProperties.filter(p=>p.name).map(p=>`<span style="white-space:nowrap">${escapeHtml(p.name)}</span>`).join(" · ");
 
@@ -6315,7 +6317,6 @@ function renderVestmintStep2(){
         ${(()=>{
           const llsPhoto=loadPhotoForProperty(VM_LLS_PHOTO_KEY);
           const rffPhoto=loadPhotoForProperty(VM_RFF_PHOTO_KEY);
-          const doralPhoto=loadPhotoForProperty(VM_DORAL_PHOTO_KEY);
           const photoCard=(label,key,photo)=>`
             <div style="flex:1;min-width:200px;background:white;border:1px solid #c8e6de;border-radius:8px;padding:12px">
               <div style="font-size:12px;font-weight:600;color:#1a3a35;margin-bottom:8px">${label}</div>
@@ -6327,7 +6328,7 @@ function renderVestmintStep2(){
                 ${photo?`<button onclick="dbRemove(photoStorageKey('${key}'));_refreshVestmintReportHTML();render()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Remove</button>`:""}
               </div>
             </div>`;
-          return photoCard("Liquid Lending Solutions",VM_LLS_PHOTO_KEY,llsPhoto)+photoCard("Real Freedom Fund",VM_RFF_PHOTO_KEY,rffPhoto)+photoCard("Doral Apartments",VM_DORAL_PHOTO_KEY,doralPhoto);
+          return photoCard("Liquid Lending Solutions",VM_LLS_PHOTO_KEY,llsPhoto)+photoCard("Real Freedom Fund",VM_RFF_PHOTO_KEY,rffPhoto);
         })()}
       </div>
     </div>
