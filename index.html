@@ -1544,28 +1544,59 @@ function toggleHomeQuarter(key){
 }
 let _homeTab = 'reports';    // 'reports' | 'portfolio'
 let _portfolioQuarter = '';  // selected quarter in Portfolio Summary tab
+// Column sorting for the Portfolio Summary table (Brian, Jul 2026). col=null →
+// natural save order. First click sorts numbers descending / names ascending;
+// clicking the same column flips direction. Export uses the same order.
+let _portfolioSort = { col:null, dir:1 };
+function setPortfolioSort(col){
+  if(_portfolioSort.col===col) _portfolioSort.dir=-_portfolioSort.dir;
+  else _portfolioSort={col, dir: col==='name'?1:-1};
+  render();
+}
+function _portfolioSortSaves(saves){
+  const {col,dir}=_portfolioSort;
+  if(!col) return saves;
+  const key=s=>{
+    const m=s.metrics||{};
+    switch(col){
+      case 'name': return String(s.propertyName||'').toLowerCase();
+      case 'units': return m.unitCount||0;
+      case 'income': return m.totalIncome||0;
+      case 'expenses': return m.totalExpense||0;
+      case 'noi': return m.noi||0;
+      case 'occ': return m.occupancy||0;
+      case 'delinq': return m.delinquency||0;
+      case 'capex': return m.capex||0;
+      case 'leases': return m.newLeases||0;
+      case 'renewals': return m.renewals||0;
+      default: return 0;
+    }
+  };
+  return saves.slice().sort((a,b)=>{const ka=key(a),kb=key(b);return (ka<kb?-1:ka>kb?1:0)*dir;});
+}
 // ─── PORTFOLIO SUMMARY ───────────────────────────────────────────────────────
 function exportPortfolioToExcel(quarter){
-  const saves=getSinglePropertySaves().filter(s=>s.quarter===quarter);
+  // Matches the on-screen table: same columns (incl. Capex) and same sort order.
+  const saves=_portfolioSortSaves(getSinglePropertySaves().filter(s=>s.quarter===quarter));
   if(!saves.length) return;
-  const headers=['Property','Units','Income','Expenses','NOI','Occupancy %','Delinquency','New Leases','Renewals'];
+  const headers=['Property','Units','Income','Expenses','NOI','Occupancy %','Delinquency','Capex','New Leases','Renewals'];
   const dataRows=saves.map(s=>{
     const m=s.metrics;
-    return[s.propertyName,m.unitCount||0,m.totalIncome||0,m.totalExpense||0,m.noi||0,m.occupancy||0,m.delinquency||0,m.newLeases||0,m.renewals||0];
+    return[s.propertyName,m.unitCount||0,m.totalIncome||0,m.totalExpense||0,m.noi||0,m.occupancy||0,m.delinquency||0,m.capex||0,m.newLeases||0,m.renewals||0];
   });
   const n=dataRows.length;
   const sum=i=>dataRows.reduce((a,r)=>a+(r[i]||0),0);
-  const totals=['TOTAL',sum(1),sum(2),sum(3),sum(4),n?Math.round(sum(5)/n):0,sum(6),sum(7),sum(8)];
+  const totals=['TOTAL',sum(1),sum(2),sum(3),sum(4),n?Math.round(sum(5)/n):0,sum(6),sum(7),sum(8),sum(9)];
   const ws=XLSX.utils.aoa_to_sheet([headers,...dataRows,totals]);
   // Dollar-format columns C-G and H (Income, Expenses, NOI, Occupancy%, Delinquency)
   const dollarFmt='"$"#,##0.00';
   const pctFmt='0"%"';
   const range=XLSX.utils.decode_range(ws['!ref']);
   for(let R=1;R<=range.e.r;R++){
-    [2,3,4,6].forEach(C=>{const cell=ws[XLSX.utils.encode_cell({r:R,c:C})];if(cell)cell.z=dollarFmt;});
+    [2,3,4,6,7].forEach(C=>{const cell=ws[XLSX.utils.encode_cell({r:R,c:C})];if(cell)cell.z=dollarFmt;});
     const pctCell=ws[XLSX.utils.encode_cell({r:R,c:5})];if(pctCell)pctCell.z=pctFmt;
   }
-  ws['!cols']=[{wch:28},{wch:7},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:12},{wch:11}];
+  ws['!cols']=[{wch:28},{wch:7},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:13},{wch:12},{wch:11}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,quarter.replace(/[\\\/\?\*\[\]]/g,''));
   const buf=XLSX.write(wb,{bookType:'xlsx',type:'array'});
@@ -1592,7 +1623,7 @@ function renderPortfolioSummary(){
   // Auto-select the most recent quarter if none selected yet or selection gone stale
   if(!_portfolioQuarter||!quarters.includes(_portfolioQuarter)) _portfolioQuarter=quarters[0];
   const q=_portfolioQuarter;
-  const qSaves=allSaves.filter(s=>s.quarter===q);
+  const qSaves=_portfolioSortSaves(allSaves.filter(s=>s.quarter===q));
   // Aggregate
   const n=qSaves.length;
   const sum=fn=>qSaves.reduce((a,s)=>a+(fn(s.metrics)||0),0);
@@ -1611,6 +1642,7 @@ function renderPortfolioSummary(){
     return Math.round(withOcc.reduce((a,m)=>a+m.occupancy,0)/withOcc.length);
   })();
   const totDelinq=sum(m=>m.delinquency);
+  const totCapex=sum(m=>m.capex);
   const totLeases=sum(m=>m.newLeases);
   const totRenewals=sum(m=>m.renewals);
   const fmtN=v=>v==null?"—":fmtWhole(v);
@@ -1638,6 +1670,7 @@ function renderPortfolioSummary(){
       </td>
       <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${m.occupancy!=null?m.occupancy+'%':'—'}</td>
       <td style="padding:10px 8px;text-align:right;color:${(m.delinquency||0)>0?'#dc2626':'#374151'};font-size:13px">${fmtN(m.delinquency)}</td>
+      <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${fmtN(m.capex)}</td>
       <td style="padding:10px 8px;text-align:center;color:#374151;font-size:13px">${m.newLeases!=null?m.newLeases:'—'}</td>
       <td style="padding:10px 8px;text-align:center;color:#374151;font-size:13px">${m.renewals!=null?m.renewals:'—'}</td>
     </tr>`;
@@ -1664,6 +1697,7 @@ function renderPortfolioSummary(){
       <div style="${cardStyle}"><div style="${labelStyle}">Total Income</div><div style="${valStyle}">${fmtN(totIncome)}</div><div style="${subStyle}">${totUnits} units</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total Expenses</div><div style="${valStyle}">${fmtN(totExpense)}</div><div style="${subStyle}">operating</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total NOI</div><div style="font-size:20px;font-weight:700;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</div><div style="${subStyle}">${totIncome?Math.round(totNoi/totIncome*100):0}% margin</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Total Capex</div><div style="${valStyle}">${fmtN(totCapex)}</div><div style="${subStyle}">capital expenditures</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Avg Occupancy</div><div style="${valStyle}">${avgOcc}%</div><div style="${subStyle}">${n} properties</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total Delinquency</div><div style="font-size:20px;font-weight:700;color:${totDelinq>0?'#dc2626':'#16a34a'}">${fmtN(totDelinq)}</div><div style="${subStyle}">balance due</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Leasing</div><div style="${valStyle}">${totLeases} new · ${totRenewals} renewals</div><div style="${subStyle}">this quarter</div></div>
@@ -1672,15 +1706,8 @@ function renderPortfolioSummary(){
       <table style="width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden">
         <thead style="background:#f0f9f7">
           <tr>
-            <th style="${thStyleL}">Property</th>
-            <th style="${thStyle}">Units</th>
-            <th style="${thStyle}">Income</th>
-            <th style="${thStyle}">Expenses</th>
-            <th style="${thStyle}">NOI</th>
-            <th style="${thStyle}">Occ %</th>
-            <th style="${thStyle}">Delinquency</th>
-            <th style="${thStyleC}">New Leases</th>
-            <th style="${thStyleC}">Renewals</th>
+            ${[['name','Property',thStyleL],['units','Units',thStyle],['income','Income',thStyle],['expenses','Expenses',thStyle],['noi','NOI',thStyle],['occ','Occ %',thStyle],['delinq','Delinquency',thStyle],['capex','Capex',thStyle],['leases','New Leases',thStyleC],['renewals','Renewals',thStyleC]].map(([k,label,st])=>
+              `<th style="${st};cursor:pointer;user-select:none" title="Sort by ${label}" onclick="setPortfolioSort('${k}')">${label}${_portfolioSort.col===k?(_portfolioSort.dir===1?' ▲':' ▼'):''}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -1693,6 +1720,7 @@ function renderPortfolioSummary(){
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</td>
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${avgOcc}%</td>
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:${totDelinq>0?'#dc2626':'#16a34a'}">${fmtN(totDelinq)}</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${fmtN(totCapex)}</td>
             <td style="padding:10px 8px;text-align:center;font-size:13px;color:#1a3a35">${totLeases}</td>
             <td style="padding:10px 8px;text-align:center;font-size:13px;color:#1a3a35">${totRenewals}</td>
           </tr>
