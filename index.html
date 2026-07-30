@@ -1698,6 +1698,7 @@ function renderPortfolioSummary(){
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">
       <div style="${cardStyle}"><div style="${labelStyle}">Total Income</div><div style="${valStyle}">${fmtN(totIncome)}</div><div style="${subStyle}">${totUnits} units</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total Expenses</div><div style="${valStyle}">${fmtN(totExpense)}</div><div style="${subStyle}">operating</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Expense Ratio</div><div style="${valStyle}">${totIncome>0?Math.round(totExpense/totIncome*100)+"%":"—"}</div><div style="${subStyle}">expenses ÷ income</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total NOI</div><div style="font-size:20px;font-weight:700;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</div><div style="${subStyle}">${totIncome?Math.round(totNoi/totIncome*100):0}% margin</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total Capex</div><div style="${valStyle}">${fmtN(totCapex)}</div><div style="${subStyle}">capital expenditures</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Avg Occupancy</div><div style="${valStyle}">${avgOcc}%</div><div style="${subStyle}">${n} properties</div></div>
@@ -1832,6 +1833,12 @@ function renderHome(){
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 // Shared loss-to-lease helper: difference between total market rent and total actual rent
 const calcLossToLease = (marketRentTotal, actualRentTotal) => marketRentTotal - actualRentTotal;
+// Capex section-label matching, shared by both income-statement parsers.
+// Tolerates the label variants seen across PMs: "Capital Expenses",
+// "Capital Improvements", "Capital Expenditures", "Maintenance - CapEx",
+// and the Indigo/hand-built "Cap Ex" / "CapEx" (Brian, Jul 2026).
+const CAPEX_SECTION_PAT=/^(cap\s*ex(?:penses|penditures)?|capital\s+(?:expenses|expenditures|improvements)|maintenance\s*-\s*cap\s*ex)$/i;
+const CAPEX_TOTAL_PAT=/^total(?:\s+for)?\s+(cap\s*ex(?:penses|penditures)?|capital\s+(?:expenses|expenditures|improvements)|maintenance\s*-\s*cap\s*ex)$/i;
 const fmt = n => n == null ? "$0.00" : n < 0
   ? `(${Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})})`
   : `$${n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -2260,10 +2267,10 @@ const parseExcel = buffer => {
     if(lc==="total operating expense"||lc==="total operating expenses"){totalExpense=total;totalExpenseSet=true;}
     else if((lc==="total expense"||lc==="total expenses")&&!totalExpenseSet) totalExpense=total;
     if(lc==="net operating income"||lc==="noi - net operating income"||lc==="net income") noi=total;
-    if(lc==="capital improvements"||lc==="capital expenses"||lc==="maintenance - capex") inCapex=true;
-    if(lc==="total for capital improvements"||lc==="total capital expenses"||lc==="total maintenance - capex"){capex=Math.abs(total);inCapex=false;}
-    if(lc==="capital expenditures"&&total!==0){capex=Math.abs(total);capexItems.push({name:label,amount:Math.abs(total)});}
-    if(inCapex&&label&&!lc.startsWith("total")&&total!==0&&lc!=="capital improvements"&&lc!=="maintenance - capex") capexItems.push({name:label,amount:Math.abs(total)});
+    if(CAPEX_SECTION_PAT.test(lc)&&total===0) inCapex=true;
+    if(CAPEX_TOTAL_PAT.test(lc)){capex=Math.abs(total);inCapex=false;}
+    if(CAPEX_SECTION_PAT.test(lc)&&total!==0){capex=Math.abs(total);capexItems.push({name:label,amount:Math.abs(total)});}
+    if(inCapex&&label&&!lc.startsWith("total")&&total!==0&&!CAPEX_SECTION_PAT.test(lc)) capexItems.push({name:label,amount:Math.abs(total)});
     const monthAmounts=monthCols.map(({colIdx})=>parseCur(row[colIdx]||0));
     const isTotal=lc.startsWith("total")||lc==="net operating income"||lc==="net income";
     // Section header only if zero total AND has a matching "Total X" row (same logic as parseQuarterFromExcel)
@@ -7618,10 +7625,10 @@ function parseQuarterFromExcel(buffer, currentQuarter) {
       if(label==="total operating expense"||label==="total operating expenses"){totalExpense=quarterTotal;_teSet=true;}
       else if((label==="total expense"||label==="total expenses")&&!_teSet) totalExpense=quarterTotal;
       // noi calculated below from totalIncome - totalExpense to avoid Buildium labelling differences
-      if(label==="capital expenses"||label==="capital improvements"||label==="maintenance - capex") inCapex = true;
-      if(label==="total capital expenses"||label==="total for capital improvements"||label==="total maintenance - capex") { capex=Math.abs(quarterTotal); inCapex=false; }
-      if(label==="capital expenditures"&&quarterTotal!==0){ capex=Math.abs(quarterTotal); capexItems.push({name:rawLabel.trim(),amount:Math.abs(quarterTotal)}); }
-      if(inCapex && label && !label.startsWith("total") && quarterTotal!==0 && label!=="capital expenses" && label!=="capital improvements" && label!=="maintenance - capex") {
+      if(CAPEX_SECTION_PAT.test(label)&&quarterTotal===0) inCapex = true;
+      if(CAPEX_TOTAL_PAT.test(label)) { capex=Math.abs(quarterTotal); inCapex=false; }
+      if(CAPEX_SECTION_PAT.test(label)&&quarterTotal!==0){ capex=Math.abs(quarterTotal); capexItems.push({name:rawLabel.trim(),amount:Math.abs(quarterTotal)}); }
+      if(inCapex && label && !label.startsWith("total") && quarterTotal!==0 && !CAPEX_SECTION_PAT.test(label)) {
         capexItems.push({name:rawLabel.trim(), amount:Math.abs(quarterTotal)});
       }
       // Income statement rows for report display
