@@ -2035,7 +2035,7 @@ const getVacantFlag = r => {
   const tenants = (r["Tenants"] || "").trim();
   if (/^vacant$/i.test(tenants)) return true;
   // Explicit "Vacant" / "Vacancy" anywhere in a Status-ish column.
-  const status = (r["Status"] || r["Residents"] || r["Resident Status"] || r["Tenant Status"] || "").toUpperCase();
+  const status = (r["Status"] || r["Unit Status"] || r["Residents"] || r["Resident Status"] || r["Tenant Status"] || "").toUpperCase();
   if (status.includes("VACANT") || status.includes("VACANCY")) return true;
   // Two "absence of a resident" heuristics. Both require the evidence-bearing
   // column to ACTUALLY exist in the file — otherwise a stripped-down rent
@@ -5965,10 +5965,15 @@ function dispatchProcessData() {
 }
 function calcOccAppFolio(csv){
   const rows=parseDelim(csv||"");
+  // "Unit Status" is the Indigo/McClain hand-built variant of AppFolio's
+  // "Status" column (Occupied/Vacant per row); accept both. The "Totals" row
+  // must be excluded — its status cell carries an occupancy RATIO (0.9166…),
+  // which would otherwise count as an occupied unit and skew the percentage.
+  const stat=r=>String(r["Status"]||r["Unit Status"]||"");
   const summaryRow=rows.find(r=>/\d+\s*units?/i.test(r["Unit"]||""));
-  if(summaryRow){const pct=parseFloat((summaryRow["Status"]||"").replace("%",""));if(!isNaN(pct))return Math.round(pct);}
-  const tr=rows.filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&r["Status"];});
-  const vc=tr.filter(r=>/vacant/i.test(r["Status"]||"")).length;
+  if(summaryRow){const pct=parseFloat(stat(summaryRow).replace("%",""));if(!isNaN(pct))return Math.round(pct);}
+  const tr=rows.filter(r=>{const u=(r["Unit"]||"").trim();return u&&!/^\d+\s*units?$/i.test(u)&&!/^totals?\b/i.test(u)&&stat(r);});
+  const vc=tr.filter(r=>/vacant/i.test(stat(r))).length;
   return tr.length>0?Math.round(((tr.length-vc)/tr.length)*100):0;
 }
 function processDataAppFolio() {
@@ -8308,6 +8313,10 @@ const PROP_TAX_PATTERNS = [
   /real\s+estate\s+tax/i,
   /prop\.?\s+tax/i,
   /county\s+tax/i,
+  // Indigo / McClain statements (hand-built into AppFolio format) label the
+  // line simply "Taxes" — EXACT match only, so "Taxes & Licenses" or
+  // "Payroll Taxes" can never satisfy the property-tax check (Brian, Jul 2026).
+  /^\s*taxes\s*$/i,
 ];
 // Returns "ok" | "zero" | "missing" so callers can tailor the warning message.
 function propTaxStatus(incomeRows){
