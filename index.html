@@ -5507,32 +5507,47 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const innerContent=_sanitizeOverviewHtml(rfInnerMatch?rfInnerMatch[1]:body);
   // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
   // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
-  const CHARS_PER_PAGE=3200;  // was 3500 — narrower content (84px side padding) makes the same text ~9% taller per page
+  const CHARS_PER_PAGE=3200;
   // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply.
   // A .pn + .sh header sits above the .rf-report so every page looks consistent with the rest of the report.
   const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${assetScopedCss}<div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
-  const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
-  const parts=innerContent.split(headingRe);
-  // Helper: chunk segments up to CHARS_PER_PAGE each
-  const chunkSegments=(segs)=>{const chunks=[];let c='';for(const s of segs){if(c.length>0&&c.length+s.length>CHARS_PER_PAGE){chunks.push(c);c='';}c+=s;}if(c.trim())chunks.push(c);return chunks;};
-  // Helper: if a single chunk is still too long (>2000 chars), split it further at </li>/</p> boundaries.
-  const splitLong=(chunk)=>{
-    if(chunk.length<=2000)return[chunk];
-    const segs=chunk.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
-    return segs.length>1?chunkSegments(segs):[chunk];
-  };
-  let pageChunks;
-  if(parts.length>1){
-    // Section-heading splits available — use them, then further split any oversized chunk
-    pageChunks=chunkSegments(parts).flatMap(splitLong);
-  } else if(innerContent.length>CHARS_PER_PAGE){
-    // No section headings but content is long — split at </li>/</p> boundaries to prevent
-    // the single .page div from overflowing the 1056px print page height.
-    const pSegs=innerContent.split(/(?<=<\/(?:p|li|h[1-6])>)/i);
-    pageChunks=pSegs.length>1?chunkSegments(pSegs):[innerContent];
-  } else {
-    pageChunks=[innerContent];
-  }
+  // NESTING-AWARE page splitter (Jul 2026). The old splitter cut at </p>
+  // boundaries regardless of depth — inside wrappers like the fund's
+  // <div class="prop"><span>…</span><p>…</p></div> that produced unbalanced
+  // </div> tags, the browser closed .rf-report early, and the rest of the
+  // page escaped its scoped styles and padding (the "Portfolio at a Glance"
+  // full-width breakage). Cuts happen ONLY where tags are balanced (depth 0):
+  //   · at the author's own <div class="pagebreak"> markers, always;
+  //   · before a top-level heading/section once the page is ≥60% full;
+  //   · at any balanced point once the budget is reached.
+  const pageChunks=(()=>{
+    const VOID=new Set(["br","hr","img","meta","input","link","col","area","base","embed","source","track","wbr"]);
+    const chunks=[]; let cur="", depth=0;
+    const push=()=>{ if(cur.trim()) chunks.push(cur); cur=""; };
+    const re=/<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g;
+    let mm;
+    while((mm=re.exec(innerContent))!==null){
+      const tok=mm[0];
+      const isTag=tok[0]==="<";
+      const tag=isTag?(mm[1]||"").toLowerCase():"";
+      const isClose=isTag&&tok[1]==="/";
+      const isVoid=isTag&&(VOID.has(tag)||/\/>$/.test(tok));
+      if(depth===0&&isTag&&!isClose){
+        if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ push(); }             // author's page break
+        else if(/^h[1-6]$/.test(tag)&&cur.length>=CHARS_PER_PAGE*0.6){ push(); }      // keep headings with their content
+        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cur.length>=CHARS_PER_PAGE*0.6){ push(); }
+      }
+      if(isTag&&!isVoid){ if(isClose) depth=Math.max(0,depth-1); else depth++; }
+      cur+=tok;
+      if(depth===0&&cur.length>=CHARS_PER_PAGE) push();
+    }
+    push();
+    // Strip the author's pagebreak marker divs — their job (deciding where
+    // pages cut) is done, and their scoped page-break-before:always CSS would
+    // otherwise force a break INSIDE our wrapped page, printing a blank page.
+    const cleaned=chunks.map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,"")).filter(c=>c.trim());
+    return cleaned.length?cleaned:[innerContent];
+  })();
   return pageChunks.map(wrapPage).join('\n');
 }).join("\n"):""}
 <!-- UNAUDITED FINANCIAL STATEMENTS (embedded PDF pages) -->
