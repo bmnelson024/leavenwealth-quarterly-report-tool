@@ -5233,12 +5233,24 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   };
 
   const prevQtrLabel=calcPrevQuarterLabel(qtr)||"Prior Quarter";
+  // Change-cell colors are INLINE and derived from the SAME arithmetic that
+  // prints the percentage (cur − pri): if the cell shows "+21%", green is
+  // guaranteed to accompany it. A generated report once rendered every change
+  // red while printing correct percentages — the class-based comparisons and
+  // the printed math had somehow diverged at runtime; deriving both from one
+  // subtraction makes divergence impossible. goodDown=true → a DECREASE is
+  // favorable (expenses, delinquency). Unknown/no-prior renders muted grey.
+  const chgCell=(cur,pri,goodDown,txt)=>{
+    const d=cur-pri;  // numeric coercion matches fmtChg's
+    const col=(pri==null||cur==null||!isFinite(d))?'#5a8070':(((goodDown?-d:d)>=0)?'#1a8a6e':'#c0392b');
+    return `<td style="color:${col};font-weight:600">${txt}</td>`;
+  };
   const qoqTbl=`<table class="st"><thead><tr><th>Metric</th><th>${prevQtrLabel}</th><th>${qtr}</th><th>Change</th></tr></thead><tbody>
-    <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td><td class="${prev&&m.totalIncome>=prev.totalIncome?"neg":"pos"}">${fmtChg(m.totalIncome,prev?.totalIncome??null)}</td></tr>
-    <tr><td>Total Expenses</td><td>${prev?fmtWhole(prev.totalExpense):"—"}</td><td>${fmtWhole(m.totalExpense)}</td><td class="${prev&&m.totalExpense<=prev.totalExpense?"neg":"pos"}">${fmtChg(m.totalExpense,prev?.totalExpense??null)}</td></tr>
-    <tr><td>Net Operating Income</td><td>${prev?fmtWhole(prev.noi):"—"}</td><td>${fmtWhole(m.noi)}</td><td class="${prev&&m.noi>=prev.noi?"neg":"pos"}">${fmtChg(m.noi,prev?.noi??null)}</td></tr>
-    <tr><td>Avg Physical Occupancy</td><td>${prev?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td><td class="${prev&&m.occupancy>=prev.occupancy?"neg":"pos"}">${fmtOccChg(m.occupancy,prev?.occupancy??null)}</td></tr>
-    <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td><td class="${prev&&m.delinquency<=prev.delinquency?"neg":"pos"}">${prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—"}</td></tr>
+    <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td>${chgCell(m.totalIncome,prev?prev.totalIncome:null,false,fmtChg(m.totalIncome,prev?.totalIncome??null))}</tr>
+    <tr><td>Total Expenses</td><td>${prev?fmtWhole(prev.totalExpense):"—"}</td><td>${fmtWhole(m.totalExpense)}</td>${chgCell(m.totalExpense,prev?prev.totalExpense:null,true,fmtChg(m.totalExpense,prev?.totalExpense??null))}</tr>
+    <tr><td>Net Operating Income</td><td>${prev?fmtWhole(prev.noi):"—"}</td><td>${fmtWhole(m.noi)}</td>${chgCell(m.noi,prev?prev.noi:null,false,fmtChg(m.noi,prev?.noi??null))}</tr>
+    <tr><td>Avg Physical Occupancy</td><td>${prev?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td>${chgCell(m.occupancy,prev?prev.occupancy:null,false,fmtOccChg(m.occupancy,prev?.occupancy??null))}</tr>
+    <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td>${chgCell(m.delinquency,prev&&prev.delinquency!=null?prev.delinquency:null,true,prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—")}</tr>
   </tbody></table>`;
 
   // Summary overflow checks
