@@ -5305,13 +5305,14 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // then append overrides that normalize sizing to match the report's typography.
   // Extract styles from other-asset HTML files, stripping document-level selectors (body, *, ::before/after)
   // that would pollute the entire report if injected into the shared <head>.
-  const stripGlobalRules=(css)=>css
-    .replace(/\bhtml\s*\{[^}]*\}/g,'')
-    .replace(/\bbody\s*\{[^}]*\}/g,'')
-    .replace(/:root\s*\{[^}]*\}/g,'')
-    .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
-    .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
-  const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
+  // stripGlobalRules/otherAssetStyles REMOVED (Jul 2026): the old pipeline
+  // injected each asset's stylesheet UNSCOPED into the report head, which let
+  // fund CSS restyle the whole report — confirmed as the mechanism behind the
+  // all-red QoQ table (the fund defines .neg{color:#9b2c2c}) and global
+  // table/td overrides. Asset styles are now injected fully SCOPED to
+  // .rf-report via _scopeAssetCss (see below), which also preserves their
+  // :root variables that the old stripper destroyed (killing every var()-based
+  // color in the asset's own pages).
   // Scopes an imported asset's stylesheet so every rule applies ONLY inside
   // .rf-report. Without this the asset's CSS was either dropped entirely
   // (style lives in <head>, ingestion took only <body> — "Portfolio at a
@@ -5364,7 +5365,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     :"";
 
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>${inv} ${qtr} Investor Report</title><style>${css}${otherAssetStyles}${otherAssetOverrides}</style></head><body>
+<html lang="en"><head><meta charset="UTF-8"><title>${inv} ${qtr} Investor Report</title><style>${css}${otherAssetOverrides}</style></head><body>
 <!-- PAGE 1: COVER -->
 <div class="page cover">
   <img src="${LOGO_FULL}" alt="LeavenWealth" style="height:60px;width:auto;margin-bottom:28px;filter:brightness(0) invert(1);"/>
