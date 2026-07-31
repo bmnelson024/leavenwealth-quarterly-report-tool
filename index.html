@@ -5312,9 +5312,45 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     .replace(/\*\s*,?\s*(?:\*::before\s*,\s*\*::after\s*)?\{[^}]*\}/g,'')
     .replace(/\*::before\s*,\s*\*::after\s*\{[^}]*\}/g,'');
   const otherAssetStyles=otherAssets.map(a=>{if(!a.html)return'';const sm=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);return sm?stripGlobalRules(sm[1]):'';}).join('\n');
-  // 84px side padding (was 52px) — imported other-asset HTML read too wide
-  // against the rest of the report; content width is now ~648px.
-  const otherAssetOverrides=`.rf-report{padding:16px 84px 80px!important;max-width:100%!important;margin:0!important;}
+  // Scopes an imported asset's stylesheet so every rule applies ONLY inside
+  // .rf-report. Without this the asset's CSS was either dropped entirely
+  // (style lives in <head>, ingestion took only <body> — "Portfolio at a
+  // Glance" rendered as an unstyled text wall) or, if it ever reached the
+  // document, would leak onto the rest of the report (the fund's .neg is RED
+  // and it restyles body/table/td globally). body/:root selectors map to
+  // .rf-report itself; @media blocks are scoped recursively; @import/@page
+  // are stripped.
+  const _scopeAssetCss=css=>{
+    const scopeSel=sel=>sel.split(",").map(s=>{
+      s=s.trim(); if(!s) return "";
+      if(/^(html|body|:root)\b/i.test(s)) return ".rf-report"+s.replace(/^(html|body|:root)/i,"");
+      if(s.startsWith(".rf-report")) return s;
+      return ".rf-report "+s;
+    }).filter(Boolean).join(", ");
+    // Brace-walking parser (a regex pass silently skipped alternate rules):
+    // plain rules get scoped selectors, @media recurses, other @-blocks
+    // (@keyframes, @font-face) copy through verbatim.
+    const walk=s=>{
+      let out="", i=0;
+      while(i<s.length){
+        const b=s.indexOf("{",i);
+        if(b<0){ out+=s.slice(i); break; }
+        const sel=s.slice(i,b).trim();
+        let depth=1, j=b+1;
+        while(j<s.length&&depth>0){ if(s[j]==="{")depth++; else if(s[j]==="}")depth--; j++; }
+        const inner=s.slice(b+1,j-1);
+        if(/^@media/i.test(sel)) out+=sel+"{"+walk(inner)+"}";
+        else if(sel.startsWith("@")) out+=sel+"{"+inner+"}";
+        else if(sel) out+=scopeSel(sel)+"{"+inner+"}";
+        i=j;
+      }
+      return out;
+    };
+    return walk(String(css||"").replace(/\/\*[\s\S]*?\*\//g,"").replace(/@import[^;]*;/gi,"").replace(/@page[^{]*\{[^}]*\}/gi,""));
+  };
+  // 68px side padding ≈ the fund documents' own intended .7in margins; the
+  // !important overrides win over the (scoped) asset body padding.
+  const otherAssetOverrides=`.rf-report{padding:16px 68px 80px!important;max-width:100%!important;margin:0!important;}
 .rf-title h1{font-size:28px!important;} .rf-title .subtitle,.rf-title .confidential{font-size:12px!important;}
 .rf-body,.rf-bullets li,.rf-callout ul li{font-size:13px!important;line-height:1.5!important;}
 .rf-note,.rf-disclaimer{font-size:11px!important;line-height:1.6!important;}
@@ -5454,6 +5490,12 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   }
   const bm=a.html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
   const body=bm?bm[1]:a.html;
+  // The asset's stylesheet usually lives in <head>, which the body extraction
+  // above discards — pull it from the RAW file and inject it scoped, so the
+  // fund's own design (KPI cards, inline property paragraphs, tables) renders
+  // faithfully without being able to restyle the rest of the report.
+  const _styleM=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+  const assetScopedCss=_styleM?`<style>${_scopeAssetCss(_styleM[1])}</style>`:"";
   // Extract inner content of .rf-report so each split chunk can be re-wrapped in its own
   // .rf-report div — this ensures otherAssetOverrides CSS (padding, margin) applies to all pages.
   const rfInnerMatch=body.match(/class="rf-report"[^>]*>([\s\S]*)<\/div>\s*$/i);
@@ -5467,7 +5509,7 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   const CHARS_PER_PAGE=3200;  // was 3500 — narrower content (84px side padding) makes the same text ~9% taller per page
   // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply.
   // A .pn + .sh header sits above the .rf-report so every page looks consistent with the rest of the report.
-  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;"><div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${assetScopedCss}<div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
   const headingRe=/(?=<div\s[^>]*class="rf-section-heading"[^>]*>)/;
   const parts=innerContent.split(headingRe);
   // Helper: chunk segments up to CHARS_PER_PAGE each
