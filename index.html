@@ -4422,7 +4422,7 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
   // Whole-number percentages — matches the single-property report's pct() (.toFixed(0)).
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(0)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
-  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
+  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:190px;object-fit:contain;background:#fff;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
   const _propNamesArr=[...state.invProperties.map(p=>p.name).filter(Boolean),
     ...(/mwp\s*5/i.test(invName||'')?['2520 M Street','Private Money Investment']:[])
   ];
@@ -5133,7 +5133,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // Whole-number percentages — matches the single-property and investment reports.
   const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(0)+"%":"—";
   const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
-  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:auto;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
+  const C=(k,t)=>{const s=state.invCharts[k];return s?`<div style="border-radius:8px;overflow:hidden;"><div class="ct">${t}</div><img src="${s}" alt="${t}" style="width:100%;height:190px;object-fit:contain;background:#fff;display:block;"/></div>`:`<div class="cb"><div class="ct">${t}</div><div class="np">Chart not uploaded</div></div>`;};
   // Property photos for cover
   const propPhotos=state.invProperties.filter(p=>p.name).map(p=>({name:p.name,photo:loadPhotoForProperty(p.name)})).filter(p=>p.photo);
   const n_photos=propPhotos.length;
@@ -5522,8 +5522,18 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   //   · at any balanced point once the budget is reached.
   const pageChunks=(()=>{
     const VOID=new Set(["br","hr","img","meta","input","link","col","area","base","embed","source","track","wbr"]);
-    const chunks=[]; let cur="", depth=0;
-    const push=()=>{ if(cur.trim()) chunks.push(cur); cur=""; };
+    const BLOCK_CLOSE=/^(p|li|h[1-6]|div|table|ul|ol|section|blockquote)$/;
+    const chunks=[]; let cur=""; const stack=[];  // open non-void tags: {tag, tok}
+    const emit=()=>{ if(cur.trim()) chunks.push(cur); cur=""; };
+    // Cut that PRESERVES NESTING at any depth: close every open wrapper, end
+    // the chunk, then reopen the same wrappers at the start of the next one.
+    // Without this, content inside a single big wrapper (the fund letter's
+    // <div class="letter">…) could never be split and overflowed the page.
+    const cut=()=>{
+      let closing=""; for(let d=stack.length-1;d>=0;d--) closing+="</"+stack[d].tag+">";
+      cur+=closing; emit();
+      cur=stack.map(s=>s.tok).join("");
+    };
     const re=/<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g;
     let mm;
     while((mm=re.exec(innerContent))!==null){
@@ -5532,16 +5542,19 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
       const tag=isTag?(mm[1]||"").toLowerCase():"";
       const isClose=isTag&&tok[1]==="/";
       const isVoid=isTag&&(VOID.has(tag)||/\/>$/.test(tok));
-      if(depth===0&&isTag&&!isClose){
-        if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ push(); }             // author's page break
-        else if(/^h[1-6]$/.test(tag)&&cur.length>=CHARS_PER_PAGE*0.6){ push(); }      // keep headings with their content
-        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cur.length>=CHARS_PER_PAGE*0.6){ push(); }
+      if(stack.length===0&&isTag&&!isClose){
+        if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ emit(); }             // author's page break
+        else if(/^h[1-6]$/.test(tag)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }      // keep headings with their content
+        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }
       }
-      if(isTag&&!isVoid){ if(isClose) depth=Math.max(0,depth-1); else depth++; }
+      if(isTag&&!isVoid){ if(isClose) stack.pop(); else stack.push({tag,tok}); }
       cur+=tok;
-      if(depth===0&&cur.length>=CHARS_PER_PAGE) push();
+      if(cur.length>=CHARS_PER_PAGE){
+        if(stack.length===0) emit();
+        else if(isTag&&isClose&&BLOCK_CLOSE.test(tag)) cut();  // legal mid-wrapper cut
+      }
     }
-    push();
+    emit();
     // Strip the author's pagebreak marker divs — their job (deciding where
     // pages cut) is done, and their scoped page-break-before:always CSS would
     // otherwise force a break INSIDE our wrapped page, printing a blank page.
