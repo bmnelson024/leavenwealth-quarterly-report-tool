@@ -5435,8 +5435,18 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   const pageChunks=(()=>{
     const VOID=new Set(["br","hr","img","meta","input","link","col","area","base","embed","source","track","wbr"]);
     const BLOCK_CLOSE=/^(p|li|h[1-6]|div|table|ul|ol|section|blockquote)$/;
-    const chunks=[]; let cur=""; const stack=[];  // open non-void tags: {tag, tok}
-    const emit=()=>{ if(cur.trim()) chunks.push(cur); cur=""; };
+    // HEIGHT-WEIGHTED budget (Jul 2026). Raw character count undercounts the
+    // rendered height of list-heavy content: a short bullet burns a full line
+    // of height plus its margin regardless of text length, so 3200 chars of
+    // bullets is far taller than 3200 chars of paragraphs — the Fund Overview
+    // bled its last bullet past the page edge. Each closed block element adds
+    // a surcharge approximating its line round-up + vertical margins
+    // (≈95 chars per line at 13px in the content column).
+    // li/p costs assume the roomiest plausible asset CSS (line-height ~1.8,
+    // ~20px block margins) — better to cut a bullet early than bleed one.
+    const BLOCK_COST={li:140,p:50,h1:170,h2:150,h3:140,h4:130,h5:120,h6:110,table:80,ul:40,ol:40,blockquote:60,div:10,section:10};
+    const chunks=[]; let cur="", cost=0; const stack=[];  // open non-void tags: {tag, tok}
+    const emit=()=>{ if(cur.trim()) chunks.push(cur); cur=""; cost=0; };
     // Cut that PRESERVES NESTING at any depth: close every open wrapper, end
     // the chunk, then reopen the same wrappers at the start of the next one.
     // Without this, content inside a single big wrapper (the fund letter's
@@ -5444,7 +5454,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     const cut=()=>{
       let closing=""; for(let d=stack.length-1;d>=0;d--) closing+="</"+stack[d].tag+">";
       cur+=closing; emit();
-      cur=stack.map(s=>s.tok).join("");
+      cur=stack.map(s=>s.tok).join(""); cost=0;
     };
     const re=/<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g;
     let mm;
@@ -5456,12 +5466,20 @@ function buildVestmintReport(m,n,invName,quarter,sections){
       const isVoid=isTag&&(VOID.has(tag)||/\/>$/.test(tok));
       if(stack.length===0&&isTag&&!isClose){
         if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ emit(); }             // author's page break
-        else if(/^h[1-6]$/.test(tag)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }      // keep headings with their content
-        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }
+        else if(/^h[1-6]$/.test(tag)&&cost>=CHARS_PER_PAGE*0.6){ emit(); }      // keep headings with their content
+        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cost>=CHARS_PER_PAGE*0.6){ emit(); }
       }
       if(isTag&&!isVoid){ if(isClose) stack.pop(); else stack.push({tag,tok}); }
       cur+=tok;
-      if(cur.length>=CHARS_PER_PAGE){
+      // Surcharge is ADDITIVE on top of the raw length (markup included, as
+      // before) — the budget can only cut earlier than the old model, never
+      // later, so previously-validated files can't regress into overflow.
+      // Tag tokens are CAPPED at 60 chars: a base64 data-URI <img> is a single
+      // 59KB token that renders ~26px tall — counting it as text blew the
+      // budget instantly and emitted a ghost page (Fund Overview logo, Jul
+      // 2026). Images get a flat ~1-line surcharge instead.
+      cost+=(isTag?Math.min(tok.length,60):tok.length)+(isTag&&isClose&&BLOCK_COST[tag]||0)+(tag==="img"?100:0);
+      if(cost>=CHARS_PER_PAGE){
         if(stack.length===0) emit();
         else if(isTag&&isClose&&BLOCK_CLOSE.test(tag)) cut();  // legal mid-wrapper cut
       }
@@ -5470,7 +5488,11 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     // Strip the author's pagebreak marker divs — their job (deciding where
     // pages cut) is done, and their scoped page-break-before:always CSS would
     // otherwise force a break INSIDE our wrapped page, printing a blank page.
-    const cleaned=chunks.map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,"")).filter(c=>c.trim());
+    const cleaned=chunks.map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,""))
+      // Drop chunks with no VISIBLE content (no text once tags are stripped and
+      // no image) — a cut near the end of input can leave a remnant that is
+      // nothing but reopened/closed wrapper markup, which printed a blank page.
+      .filter(c=>c.replace(/<[^>]+>/g,"").replace(/&nbsp;/gi," ").trim()||/<img\b/i.test(c));
     return cleaned.length?cleaned:[innerContent];
   })();
   return pageChunks.map(wrapPage).join('\n');
