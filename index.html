@@ -194,6 +194,11 @@ const FILES_PREFIX = "lw_files_";
 const INV_FILES_PREFIX = "lw_invfiles_";
 const VESTMINT_FINANCIALS_PREFIX = "lw_vmfin_";
 const VESTMINT_OTHER_PREFIX = "lw_vmother_";
+// Reserved "asset id" for the uploaded Fund Overview HTML — stored under the
+// same lw_vmother_<saveKey>_<id> key space so the large-key prefetch, write
+// allowlist, and delete cleanup all cover it without new plumbing. Real asset
+// ids are Date.now() numbers, so this string can never collide.
+const VM_FUNDOV_ASSET_ID = "fundoverview";
 // Prefixes for large binary rows excluded from supaBootstrap's bulk fetch.
 // supaFetchLargeKeysForSave loads these on demand per save. Keep in sync:
 // if you add a new large-key prefix, add it here AND in supaFetchLargeKeysForSave.
@@ -746,6 +751,7 @@ function _makeDefaultState(){
     invHasProForma: true,   // show "vs. Pro Forma" in investment chart labels?
     // ── VestMint Fund mode state ──
     vestmintFundOverview: "",   // editable fund summary / boilerplate text
+    vestmintFundOverviewHtml: "", // uploaded .html file (takes precedence; same pipeline as Other Assets)
     vestmintFinancials: [],     // array of data URLs — pages rendered from uploaded financial-statement PDFs
     vestmintOtherAssets: [],    // [{id, name, html:''}] — dynamically added investment sections (html = raw HTML string from uploaded .html file)
     vestmintSections: { fundOverview:true, financialCharts:true, leasingSection:true, financialStatements:true, otherAssets:true },
@@ -1006,6 +1012,9 @@ function saveProgress(options){
       if(state.source==='vestmint'){
         saveVestmintFinancialsForKey(key,state.vestmintFinancials||[],onPersistErr);
         (state.vestmintOtherAssets||[]).forEach(a=>saveVestmintOtherAssetHtmlForKey(key,a.id,a.html||"",onPersistErr));
+        // Uploaded Fund Overview HTML rides the same key space; only write when
+        // present — the Remove button clears the KV row explicitly.
+        if(state.vestmintFundOverviewHtml) saveVestmintOtherAssetHtmlForKey(key,VM_FUNDOV_ASSET_ID,state.vestmintFundOverviewHtml,onPersistErr);
       }
     } else {
       saveChartsForKey(key,state.charts,onPersistErr);
@@ -1244,6 +1253,7 @@ async function loadSave(key){
       suppIncome:data.suppIncome||{sfhIncome:'',sfhExpenses:'',locIncome:''},
       bgChampionCustom:{commentary:(data.bgChampionCustom&&data.bgChampionCustom.commentary)||"",charts:loadBgChampionChartsForKey(key)},
       vestmintFundOverview:data.vestmintFundOverview||"",
+      vestmintFundOverviewHtml:loadVestmintOtherAssetHtmlForKey(key,VM_FUNDOV_ASSET_ID)||"",
       vestmintFinancials:loadVestmintFinancialsForKey(key),
       vestmintOtherAssets:(data.vestmintOtherAssets||[]).map(a=>({...a, html:loadVestmintOtherAssetHtmlForKey(key,a.id)})),
       vestmintSections:data.vestmintSections||{fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true},
@@ -1298,6 +1308,9 @@ function deleteSave(key){
           if(a && a.id) dbRemove(VESTMINT_OTHER_PREFIX+key+"_"+a.id);
         });
       }
+      // The reserved Fund Overview id isn't in vestmintOtherAssets — clean it
+      // up explicitly (harmless no-op when nothing was uploaded).
+      dbRemove(VESTMINT_OTHER_PREFIX+key+"_"+VM_FUNDOV_ASSET_ID);
     }catch(innerErr){ console.warn('[QRB] deleteSave: could not clean up vmother keys:', innerErr); }
     dbRemove(SAVE_PREFIX+key);
     dbRemove(CHARTS_PREFIX+key);
@@ -1526,6 +1539,7 @@ function selectSource(src){
   state._incomeAnnualFallback = false;  // never leak a prior report's fallback state (M-2)
   // VestMint Fund mode
   state.vestmintFundOverview = "";
+  state.vestmintFundOverviewHtml = "";
   state.vestmintFinancials = [];
   state.vestmintOtherAssets = [];
   state.vestmintSections = {fundOverview:true,financialCharts:true,leasingSection:true,financialStatements:true,otherAssets:true};
@@ -5359,12 +5373,108 @@ function buildVestmintReport(m,n,invName,quarter,sections){
 .rf-note,.rf-disclaimer{font-size:11px!important;line-height:1.6!important;}
 .rf-stat .value{font-size:20px!important;} .rf-stat .label{font-size:10px!important;}
 .rf-section-heading{font-size:10px!important;} .rf-property-heading .name{font-size:14px!important;} .rf-property-heading .location{font-size:11px!important;}
-.rf-callout{padding:12px 16px!important;} .rf-stat{padding:12px 10px!important;}`;
+.rf-callout{padding:12px 16px!important;} .rf-stat{padding:12px 10px!important;}
+/* Neutralize the report's own .page layout on divs INSIDE asset content (Jul 2026).
+   Uploaded fund files sometimes wrap their letter in <div class="page"> — without
+   this, the report's global .page rule (min-height:1056px, page-break-after:always,
+   48px padding, shadow) applies to that inner div and nests a phantom full-height
+   sheet inside the real page, forcing breaks and blank space. Borders/colors the
+   asset defines for its own .page still win (its scoped CSS comes later). */
+.rf-report .page{width:auto;min-height:0!important;height:auto!important;margin:0;padding:0;box-shadow:none;border-left:none;position:static;page-break-after:auto!important;break-after:auto!important;page-break-inside:auto!important;break-inside:auto!important;}
+/* Base typography for style-less asset fragments (semantic-only HTML with no
+   <style> block). Asset stylesheets are injected AFTER these, so files that
+   bring their own design override every rule here. */
+.rf-report{font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.75;color:#1a1a1a;}
+.rf-report p{margin:0 0 16px;}
+.rf-report h2,.rf-report h3{font-size:13.5px;font-weight:700;margin:22px 0 10px;}
+.rf-report ul,.rf-report ol{margin:0 0 16px 22px;padding:0;}
+.rf-report li{margin-bottom:8px;}`;
   // Scope disclaimer — shown on pages whose metrics cover only the apartment portfolio
   const otherAssetNames=otherAssets.map(a=>a.name).filter(Boolean);
   const scopeNote=otherAssetNames.length>0
     ?`<div style="font-size:10px;color:#9ca3af;font-family:sans-serif;font-style:italic;margin:-12px 0 14px;">Residential apartment portfolio only &nbsp;·&nbsp; Does not include ${otherAssetNames.map(escapeHtml).join(' or ')}</div>`
     :"";
+
+  // Shared uploaded-HTML page pipeline (Jul 2026) — used by BOTH the Other
+  // Assets sections and the uploaded Fund Overview. Extracts body + stylesheet
+  // from the fund's HTML file, scopes the CSS to .rf-report, sanitizes the
+  // content, splits it into balanced page chunks, and wraps each chunk as a
+  // report page under the given heading.
+  const renderAssetHtmlPages=(rawHtml,heading)=>{
+  const bm=rawHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const body=bm?bm[1]:rawHtml;
+  // The asset's stylesheet usually lives in <head>, which the body extraction
+  // above discards — pull it from the RAW file and inject it scoped, so the
+  // fund's own design (KPI cards, inline property paragraphs, tables) renders
+  // faithfully without being able to restyle the rest of the report.
+  const _styleM=rawHtml.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+  const assetScopedCss=_styleM?`<style>${_scopeAssetCss(_styleM[1])}</style>`:"";
+  // Extract inner content of .rf-report so each split chunk can be re-wrapped in its own
+  // .rf-report div — this ensures otherAssetOverrides CSS (padding, margin) applies to all pages.
+  const rfInnerMatch=body.match(/class="rf-report"[^>]*>([\s\S]*)<\/div>\s*$/i);
+  // Sanitize partner-uploaded asset HTML before it enters the report (audit H-5):
+  // these pages are typically authored by external fund managers, and the report
+  // renders in a same-origin iframe — an embedded script would otherwise run
+  // with full access to the app session. Static content passes through intact.
+  const innerContent=_sanitizeOverviewHtml(rfInnerMatch?rfInnerMatch[1]:body);
+  // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
+  // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
+  const CHARS_PER_PAGE=3200;
+  // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply.
+  // A .pn + .sh header sits above the .rf-report so every page looks consistent with the rest of the report.
+  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${assetScopedCss}<div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${heading}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
+  // NESTING-AWARE page splitter (Jul 2026). The old splitter cut at </p>
+  // boundaries regardless of depth — inside wrappers like the fund's
+  // <div class="prop"><span>…</span><p>…</p></div> that produced unbalanced
+  // </div> tags, the browser closed .rf-report early, and the rest of the
+  // page escaped its scoped styles and padding (the "Portfolio at a Glance"
+  // full-width breakage). Cuts happen ONLY where tags are balanced (depth 0):
+  //   · at the author's own <div class="pagebreak"> markers, always;
+  //   · before a top-level heading/section once the page is ≥60% full;
+  //   · at any balanced point once the budget is reached.
+  const pageChunks=(()=>{
+    const VOID=new Set(["br","hr","img","meta","input","link","col","area","base","embed","source","track","wbr"]);
+    const BLOCK_CLOSE=/^(p|li|h[1-6]|div|table|ul|ol|section|blockquote)$/;
+    const chunks=[]; let cur=""; const stack=[];  // open non-void tags: {tag, tok}
+    const emit=()=>{ if(cur.trim()) chunks.push(cur); cur=""; };
+    // Cut that PRESERVES NESTING at any depth: close every open wrapper, end
+    // the chunk, then reopen the same wrappers at the start of the next one.
+    // Without this, content inside a single big wrapper (the fund letter's
+    // <div class="letter">…) could never be split and overflowed the page.
+    const cut=()=>{
+      let closing=""; for(let d=stack.length-1;d>=0;d--) closing+="</"+stack[d].tag+">";
+      cur+=closing; emit();
+      cur=stack.map(s=>s.tok).join("");
+    };
+    const re=/<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g;
+    let mm;
+    while((mm=re.exec(innerContent))!==null){
+      const tok=mm[0];
+      const isTag=tok[0]==="<";
+      const tag=isTag?(mm[1]||"").toLowerCase():"";
+      const isClose=isTag&&tok[1]==="/";
+      const isVoid=isTag&&(VOID.has(tag)||/\/>$/.test(tok));
+      if(stack.length===0&&isTag&&!isClose){
+        if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ emit(); }             // author's page break
+        else if(/^h[1-6]$/.test(tag)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }      // keep headings with their content
+        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }
+      }
+      if(isTag&&!isVoid){ if(isClose) stack.pop(); else stack.push({tag,tok}); }
+      cur+=tok;
+      if(cur.length>=CHARS_PER_PAGE){
+        if(stack.length===0) emit();
+        else if(isTag&&isClose&&BLOCK_CLOSE.test(tag)) cut();  // legal mid-wrapper cut
+      }
+    }
+    emit();
+    // Strip the author's pagebreak marker divs — their job (deciding where
+    // pages cut) is done, and their scoped page-break-before:always CSS would
+    // otherwise force a break INSIDE our wrapped page, printing a blank page.
+    const cleaned=chunks.map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,"")).filter(c=>c.trim());
+    return cleaned.length?cleaned:[innerContent];
+  })();
+  return pageChunks.map(wrapPage).join('\n');
+  };
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>${inv} ${qtr} Investor Report</title><style>${css}${otherAssetOverrides}</style></head><body>
@@ -5378,8 +5488,11 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   ${n_photos>0?photoStrip:`<div style="margin-top:20px;font-family:sans-serif;font-size:11px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;">${propNamesHtml}</div>`}
   ${fundEntityRow}
 </div>
-<!-- PAGE 2: FUND OVERVIEW (own page, only if enabled and content exists) -->
-${sec.fundOverview&&state.vestmintFundOverview?`<div class="page">
+<!-- PAGE 2: FUND OVERVIEW (own page, only if enabled and content exists).
+     An uploaded HTML file takes precedence over the free-form editor and runs
+     through the same scoped/sanitized/split pipeline as Other Assets. -->
+${sec.fundOverview&&state.vestmintFundOverviewHtml?renderAssetHtmlPages(state.vestmintFundOverviewHtml,`Fund Overview — ${qtr}`)
+:sec.fundOverview&&state.vestmintFundOverview?`<div class="page">
   <div class="pn">${inv}</div><div class="sh">Fund Overview</div>
   <div style="font-family:sans-serif;font-size:13px;line-height:1.75;">${fmtOverview(foPart1)}</div>
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
@@ -5491,79 +5604,9 @@ ${sec.otherAssets&&otherAssets.length>0?otherAssets.map(a=>{
   <div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div>
 </div>`;
   }
-  const bm=a.html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-  const body=bm?bm[1]:a.html;
-  // The asset's stylesheet usually lives in <head>, which the body extraction
-  // above discards — pull it from the RAW file and inject it scoped, so the
-  // fund's own design (KPI cards, inline property paragraphs, tables) renders
-  // faithfully without being able to restyle the rest of the report.
-  const _styleM=a.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
-  const assetScopedCss=_styleM?`<style>${_scopeAssetCss(_styleM[1])}</style>`:"";
-  // Extract inner content of .rf-report so each split chunk can be re-wrapped in its own
-  // .rf-report div — this ensures otherAssetOverrides CSS (padding, margin) applies to all pages.
-  const rfInnerMatch=body.match(/class="rf-report"[^>]*>([\s\S]*)<\/div>\s*$/i);
-  // Sanitize partner-uploaded asset HTML before it enters the report (audit H-5):
-  // these pages are typically authored by external fund managers, and the report
-  // renders in a same-origin iframe — an embedded script would otherwise run
-  // with full access to the app session. Static content passes through intact.
-  const innerContent=_sanitizeOverviewHtml(rfInnerMatch?rfInnerMatch[1]:body);
-  // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
-  // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
-  const CHARS_PER_PAGE=3200;
-  // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply.
-  // A .pn + .sh header sits above the .rf-report so every page looks consistent with the rest of the report.
-  const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${assetScopedCss}<div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${aName} — ${qtr}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
-  // NESTING-AWARE page splitter (Jul 2026). The old splitter cut at </p>
-  // boundaries regardless of depth — inside wrappers like the fund's
-  // <div class="prop"><span>…</span><p>…</p></div> that produced unbalanced
-  // </div> tags, the browser closed .rf-report early, and the rest of the
-  // page escaped its scoped styles and padding (the "Portfolio at a Glance"
-  // full-width breakage). Cuts happen ONLY where tags are balanced (depth 0):
-  //   · at the author's own <div class="pagebreak"> markers, always;
-  //   · before a top-level heading/section once the page is ≥60% full;
-  //   · at any balanced point once the budget is reached.
-  const pageChunks=(()=>{
-    const VOID=new Set(["br","hr","img","meta","input","link","col","area","base","embed","source","track","wbr"]);
-    const BLOCK_CLOSE=/^(p|li|h[1-6]|div|table|ul|ol|section|blockquote)$/;
-    const chunks=[]; let cur=""; const stack=[];  // open non-void tags: {tag, tok}
-    const emit=()=>{ if(cur.trim()) chunks.push(cur); cur=""; };
-    // Cut that PRESERVES NESTING at any depth: close every open wrapper, end
-    // the chunk, then reopen the same wrappers at the start of the next one.
-    // Without this, content inside a single big wrapper (the fund letter's
-    // <div class="letter">…) could never be split and overflowed the page.
-    const cut=()=>{
-      let closing=""; for(let d=stack.length-1;d>=0;d--) closing+="</"+stack[d].tag+">";
-      cur+=closing; emit();
-      cur=stack.map(s=>s.tok).join("");
-    };
-    const re=/<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g;
-    let mm;
-    while((mm=re.exec(innerContent))!==null){
-      const tok=mm[0];
-      const isTag=tok[0]==="<";
-      const tag=isTag?(mm[1]||"").toLowerCase():"";
-      const isClose=isTag&&tok[1]==="/";
-      const isVoid=isTag&&(VOID.has(tag)||/\/>$/.test(tok));
-      if(stack.length===0&&isTag&&!isClose){
-        if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ emit(); }             // author's page break
-        else if(/^h[1-6]$/.test(tag)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }      // keep headings with their content
-        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cur.length>=CHARS_PER_PAGE*0.6){ emit(); }
-      }
-      if(isTag&&!isVoid){ if(isClose) stack.pop(); else stack.push({tag,tok}); }
-      cur+=tok;
-      if(cur.length>=CHARS_PER_PAGE){
-        if(stack.length===0) emit();
-        else if(isTag&&isClose&&BLOCK_CLOSE.test(tag)) cut();  // legal mid-wrapper cut
-      }
-    }
-    emit();
-    // Strip the author's pagebreak marker divs — their job (deciding where
-    // pages cut) is done, and their scoped page-break-before:always CSS would
-    // otherwise force a break INSIDE our wrapped page, printing a blank page.
-    const cleaned=chunks.map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,"")).filter(c=>c.trim());
-    return cleaned.length?cleaned:[innerContent];
-  })();
-  return pageChunks.map(wrapPage).join('\n');
+  // Full ingestion pipeline (extract → scope → sanitize → split → wrap) lives
+  // in renderAssetHtmlPages — shared with the uploaded Fund Overview.
+  return renderAssetHtmlPages(a.html,`${aName} — ${qtr}`);
 }).join("\n"):""}
 <!-- UNAUDITED FINANCIAL STATEMENTS (embedded PDF pages) -->
 ${sec.financialStatements&&finPages.length>0?(()=>{
@@ -6434,7 +6477,13 @@ function renderVestmintStep2(){
 
     <div style="border:1px solid #c8e6de;border-radius:10px;padding:14px 16px;margin-bottom:16px;background:#f9fafb">
       <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase">Fund Overview</div>
-      <p style="font-size:12px;color:#5a8070;margin:0 0 8px">Optional — appears on the Summary page above the financials table.</p>
+      <p style="font-size:12px;color:#5a8070;margin:0 0 8px">Optional — upload an HTML file (rendered with the same restrictions as Other Assets) or write free-form text below.</p>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <button onclick="loadVestmintFundOverviewHTML()" style="background:#1a3a35;color:white;border:none;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer">📄 ${state.vestmintFundOverviewHtml?"Replace HTML":"Upload HTML"}</button>
+        ${state.vestmintFundOverviewHtml?`<button onclick="state.vestmintFundOverviewHtml='';saveVestmintOtherAssetHtmlForKey(currentSaveKey(),VM_FUNDOV_ASSET_ID,'');_refreshVestmintReportHTML();render()" style="background:white;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">✕ Remove</button>`:""}
+        <span style="font-size:12px;color:${state.vestmintFundOverviewHtml?"#16a34a":"#9ca3af"};font-weight:600">${state.vestmintFundOverviewHtml?"✓ HTML loaded":"No HTML uploaded"}</span>
+      </div>
+      ${state.vestmintFundOverviewHtml?`<div style="font-size:12px;color:#9ca3af;font-style:italic;padding:4px 0 2px">The uploaded HTML renders as the Fund Overview and overrides the text editor. Remove it to write free-form text instead.</div>`:`
       <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center">
         <button onmousedown="event.preventDefault();document.execCommand('bold')" title="Bold" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;font-weight:700;cursor:pointer;color:#1a3a35;line-height:1.4">B</button>
         <button onmousedown="event.preventDefault();document.execCommand('underline')" title="Underline" style="background:white;border:1px solid #c8e6de;border-radius:4px;padding:3px 9px;font-size:13px;cursor:pointer;color:#1a3a35;text-decoration:underline;line-height:1.4">U</button>
@@ -6458,7 +6507,7 @@ function renderVestmintStep2(){
         oninput="state.vestmintFundOverview=this.innerHTML"
         onpaste="(function(e){e.preventDefault();var html=e.clipboardData.getData('text/html')||'';if(!html){var txt=e.clipboardData.getData('text/plain')||'';document.execCommand('insertText',false,txt);return;}var tmp=document.createElement('div');tmp.innerHTML=html;tmp.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(h){var sp=document.createElement('span');sp.innerHTML=h.innerHTML;h.parentNode.replaceChild(sp,h);});tmp.querySelectorAll('[style]').forEach(function(el){el.style.fontSize='';el.style.fontFamily='';el.style.color='';el.style.backgroundColor='';el.style.lineHeight='';});tmp.querySelectorAll('font').forEach(function(f){var sp=document.createElement('span');sp.innerHTML=f.innerHTML;f.parentNode.replaceChild(sp,f);});tmp.querySelectorAll('span:empty,span[style=\\'\\']').forEach(function(s){var p=s.parentNode;while(s.firstChild)p.insertBefore(s.firstChild,s);p.removeChild(s);});document.execCommand('insertHTML',false,tmp.innerHTML);state.vestmintFundOverview=this.innerHTML;})(event)"
         style="width:100%;min-height:100px;padding:10px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif;line-height:1.6;box-sizing:border-box;background:white;outline:none"
-      >${state.vestmintFundOverview||""}</div>
+      >${state.vestmintFundOverview||""}</div>`}
     </div>
 
     ${(()=>{
@@ -6610,7 +6659,7 @@ function renderVestmintStep2(){
       <div style="font-size:12px;font-weight:700;color:#1a3a35;margin-bottom:10px;letter-spacing:.5px;text-transform:uppercase">Report Sections</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         ${[
-          ["fundOverview","Fund Overview","Fund overview narrative on the summary page"],
+          ["fundOverview","Fund Overview","Uploaded HTML or free-form narrative, on its own page after the cover"],
           ["financialCharts","Financial Charts","4 pages of financial chart slides"],
           ["leasingSection","Leasing Section","Leasing stats + occupancy chart slides"],
           ["financialStatements","Financial Statements","Embedded fund financial statement pages"],
@@ -6646,6 +6695,25 @@ function loadVestmintFinancialsPDF(){
       });
       render();
     }catch(err){showError("Could not render PDF: "+err.message);}
+  };
+  inp.click();
+}
+function loadVestmintFundOverviewHTML(){
+  const inp=document.createElement("input"); inp.type="file"; inp.accept=".html,.htm";
+  inp.onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const html=ev.target.result||"";
+      state.vestmintFundOverviewHtml=html;
+      saveVestmintOtherAssetHtmlForKey(currentSaveKey(),VM_FUNDOV_ASSET_ID,html,err=>{
+        console.warn('[QRB] Fund Overview HTML save failed:',err&&err.message||err);
+        showToast("⚠️ HTML loaded but could not be saved to the cloud — it may be too large. It will need re-uploading next session.");
+      });
+      _refreshVestmintReportHTML();
+      render();
+    };
+    reader.readAsText(f);
   };
   inp.click();
 }
