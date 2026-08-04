@@ -5417,83 +5417,101 @@ function buildVestmintReport(m,n,invName,quarter,sections){
   // renders in a same-origin iframe — an embedded script would otherwise run
   // with full access to the app session. Static content passes through intact.
   const innerContent=_sanitizeOverviewHtml(rfInnerMatch?rfInnerMatch[1]:body);
-  // Split multi-page HTML into separate .page divs so every PDF page gets its own footer.
-  // Split at section-heading boundaries, grouping sections to ~3500 chars per page.
-  const CHARS_PER_PAGE=3200;
   // Each chunk is re-wrapped in a fresh .rf-report so padding/margin overrides always apply.
   // A .pn + .sh header sits above the .rf-report so every page looks consistent with the rest of the report.
   const wrapPage=(content)=>`<div class="page" style="padding:0;position:relative;">${assetScopedCss}<div style="padding:48px 52px 0"><div class="pn">${inv}</div><div class="sh">${heading}</div></div><div class="rf-report">${content}</div><div class="footer-prop">${inv}</div><img src="${LOGO_SYMBOL}" class="footer-logo"/><div class="pgn">${pg.v()}</div></div>`;
-  // NESTING-AWARE page splitter (Jul 2026). The old splitter cut at </p>
-  // boundaries regardless of depth — inside wrappers like the fund's
-  // <div class="prop"><span>…</span><p>…</p></div> that produced unbalanced
-  // </div> tags, the browser closed .rf-report early, and the rest of the
-  // page escaped its scoped styles and padding (the "Portfolio at a Glance"
-  // full-width breakage). Cuts happen ONLY where tags are balanced (depth 0):
-  //   · at the author's own <div class="pagebreak"> markers, always;
-  //   · before a top-level heading/section once the page is ≥60% full;
-  //   · at any balanced point once the budget is reached.
+  // MEASURED PAGE PACKER (Aug 2026). Replaces the character-cost splitter:
+  // character counts have no reliable relationship to rendered pixels across
+  // fund files (line-height, margins, base64 images), so budget tuning either
+  // bled a bullet past the page edge or left pages half empty. This packer
+  // renders the sanitized content OFF-SCREEN at the exact report width with
+  // the asset's own scoped stylesheet applied, reads real element geometry
+  // from the browser's layout engine, and cuts pages at true pixel
+  // boundaries. Wrappers are split by closing/reopening the ancestor chain
+  // (same nesting guarantee as the old cut()); the author's
+  // <div class="pagebreak"> markers still force cuts.
+  // Usable px inside .rf-report: 1056 page − 122 header stack (48px pad +
+  // .pn 15px line + 6 margin + .sh 35px block + 18 margin) − 16 top / 80
+  // bottom .rf-report padding = 838; 830 leaves 8px slack.
+  const PAGE_H=830;
   const pageChunks=(()=>{
-    const VOID=new Set(["br","hr","img","meta","input","link","col","area","base","embed","source","track","wbr"]);
-    const BLOCK_CLOSE=/^(p|li|h[1-6]|div|table|ul|ol|section|blockquote)$/;
-    // HEIGHT-WEIGHTED budget (Jul 2026). Raw character count undercounts the
-    // rendered height of list-heavy content: a short bullet burns a full line
-    // of height plus its margin regardless of text length, so 3200 chars of
-    // bullets is far taller than 3200 chars of paragraphs — the Fund Overview
-    // bled its last bullet past the page edge. Each closed block element adds
-    // a surcharge approximating its line round-up + vertical margins
-    // (≈95 chars per line at 13px in the content column).
-    // li/p costs assume the roomiest plausible asset CSS (line-height ~1.8,
-    // ~20px block margins) — better to cut a bullet early than bleed one.
-    const BLOCK_COST={li:140,p:50,h1:170,h2:150,h3:140,h4:130,h5:120,h6:110,table:80,ul:40,ol:40,blockquote:60,div:10,section:10};
-    const chunks=[]; let cur="", cost=0; const stack=[];  // open non-void tags: {tag, tok}
-    const emit=()=>{ if(cur.trim()) chunks.push(cur); cur=""; cost=0; };
-    // Cut that PRESERVES NESTING at any depth: close every open wrapper, end
-    // the chunk, then reopen the same wrappers at the start of the next one.
-    // Without this, content inside a single big wrapper (the fund letter's
-    // <div class="letter">…) could never be split and overflowed the page.
-    const cut=()=>{
-      let closing=""; for(let d=stack.length-1;d>=0;d--) closing+="</"+stack[d].tag+">";
-      cur+=closing; emit();
-      cur=stack.map(s=>s.tok).join(""); cost=0;
-    };
-    const re=/<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+/g;
-    let mm;
-    while((mm=re.exec(innerContent))!==null){
-      const tok=mm[0];
-      const isTag=tok[0]==="<";
-      const tag=isTag?(mm[1]||"").toLowerCase():"";
-      const isClose=isTag&&tok[1]==="/";
-      const isVoid=isTag&&(VOID.has(tag)||/\/>$/.test(tok));
-      if(stack.length===0&&isTag&&!isClose){
-        if(/class\s*=\s*["'][^"']*\bpagebreak\b/i.test(tok)){ emit(); }             // author's page break
-        else if(/^h[1-6]$/.test(tag)&&cost>=CHARS_PER_PAGE*0.6){ emit(); }      // keep headings with their content
-        else if(/^div$/.test(tag)&&/rf-section-heading/.test(tok)&&cost>=CHARS_PER_PAGE*0.6){ emit(); }
+    try{
+      const SPLITTABLE=/^(div|section|ul|ol|blockquote)$/i;
+      const escText=t=>t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      // outerHTML = openTag + innerHTML + "</tag>" — recover the open tag by
+      // length arithmetic (safe for any attribute/content).
+      const openTagOf=el=>{const o=el.outerHTML;return o.slice(0,o.length-el.innerHTML.length-(el.tagName.length+3));};
+      const meas=document.createElement("div");
+      meas.style.cssText="position:absolute;left:-99999px;top:0;width:816px;visibility:hidden;pointer-events:none;";
+      meas.innerHTML=`<style>${otherAssetOverrides}</style>${assetScopedCss}<div class="rf-report">${innerContent}</div>`;
+      document.body.appendChild(meas);
+      const rootEl=meas.querySelector(".rf-report");
+      const rootTop=rootEl.getBoundingClientRect().top;
+      // Flatten content into ATOMS (indivisible units) carrying real pixel
+      // spans (margins included) and their ancestor wrapper chain. Containers
+      // taller than 120px are recursed so page boundaries always have
+      // fine-grained cut points — this is what lets a single huge wrapper
+      // (the fund letter's <div class="letter">) split cleanly.
+      const atoms=[];
+      const walk=(el,stack)=>{
+        for(let node=el.firstChild;node;node=node.nextSibling){
+          if(node.nodeType===3){
+            if(!node.textContent.trim()) continue;
+            const rng=document.createRange(); rng.selectNodeContents(node);
+            const r=rng.getBoundingClientRect();
+            atoms.push({top:r.top-rootTop,bottom:r.bottom-rootTop,html:escText(node.textContent),stack:stack});
+            continue;
+          }
+          if(node.nodeType!==1) continue;
+          const r=node.getBoundingClientRect();
+          const cs=getComputedStyle(node);
+          const top=r.top-rootTop-(parseFloat(cs.marginTop)||0);
+          const bottom=r.bottom-rootTop+(parseFloat(cs.marginBottom)||0);
+          if(/\bpagebreak\b/i.test(node.className||"")){ atoms.push({br:true,top,bottom,stack}); continue; }
+          if(SPLITTABLE.test(node.tagName)&&(r.bottom-r.top)>120&&node.children.length>0){
+            walk(node,stack.concat([node]));
+          }else{
+            atoms.push({top,bottom,html:node.outerHTML,stack});
+          }
+        }
+      };
+      walk(rootEl,[]);
+      document.body.removeChild(meas);
+      if(!atoms.length) return [innerContent];
+      // Greedy pixel packing with forced cuts at author pagebreak markers.
+      const pagesAtoms=[]; let curA=[]; let pageStart=null;
+      for(const a of atoms){
+        if(a.br){ if(curA.length){pagesAtoms.push(curA);curA=[];} pageStart=null; continue; }
+        if(pageStart===null) pageStart=a.top;
+        if(a.bottom-pageStart>PAGE_H&&curA.length){ pagesAtoms.push(curA); curA=[]; pageStart=a.top; }
+        curA.push(a);
       }
-      if(isTag&&!isVoid){ if(isClose) stack.pop(); else stack.push({tag,tok}); }
-      cur+=tok;
-      // Surcharge is ADDITIVE on top of the raw length (markup included, as
-      // before) — the budget can only cut earlier than the old model, never
-      // later, so previously-validated files can't regress into overflow.
-      // Tag tokens are CAPPED at 60 chars: a base64 data-URI <img> is a single
-      // 59KB token that renders ~26px tall — counting it as text blew the
-      // budget instantly and emitted a ghost page (Fund Overview logo, Jul
-      // 2026). Images get a flat ~1-line surcharge instead.
-      cost+=(isTag?Math.min(tok.length,60):tok.length)+(isTag&&isClose&&BLOCK_COST[tag]||0)+(tag==="img"?100:0);
-      if(cost>=CHARS_PER_PAGE){
-        if(stack.length===0) emit();
-        else if(isTag&&isClose&&BLOCK_CLOSE.test(tag)) cut();  // legal mid-wrapper cut
-      }
-    }
-    emit();
-    // Strip the author's pagebreak marker divs — their job (deciding where
-    // pages cut) is done, and their scoped page-break-before:always CSS would
-    // otherwise force a break INSIDE our wrapped page, printing a blank page.
-    const cleaned=chunks.map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,""))
-      // Drop chunks with no VISIBLE content (no text once tags are stripped and
-      // no image) — a cut near the end of input can leave a remnant that is
-      // nothing but reopened/closed wrapper markup, which printed a blank page.
+      if(curA.length) pagesAtoms.push(curA);
+      // Serialize each page, closing/reopening the shared wrapper chain at
+      // cuts so every chunk is balanced HTML.
+      const cleaned=pagesAtoms.map(list=>{
+        let out="",prev=[];
+        for(const a of list){
+          const st=a.stack;
+          let i=0; while(i<Math.min(prev.length,st.length)&&prev[i]===st[i]) i++;
+          for(let d=prev.length-1;d>=i;d--) out+="</"+prev[d].tagName.toLowerCase()+">";
+          for(let d=i;d<st.length;d++) out+=openTagOf(st[d]);
+          out+=a.html; prev=st;
+        }
+        for(let d=prev.length-1;d>=0;d--) out+="</"+prev[d].tagName.toLowerCase()+">";
+        return out;
+      })
+      // Strip pagebreak divs that survive INSIDE atoms — their scoped
+      // page-break-before:always would force a break inside our wrapped page.
+      .map(c=>c.replace(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi,""))
+      // Drop chunks with no visible content (wrapper-markup remnants).
       .filter(c=>c.replace(/<[^>]+>/g,"").replace(/&nbsp;/gi," ").trim()||/<img\b/i.test(c));
-    return cleaned.length?cleaned:[innerContent];
+      return cleaned.length?cleaned:[innerContent];
+    }catch(err){
+      console.warn("[QRB] measured page packer failed — falling back to pagebreak-marker split:",err);
+      const parts=innerContent.split(/<div[^>]*\bpagebreak\b[^>]*>\s*<\/div>/gi).filter(s=>s.trim());
+      return parts.length?parts:[innerContent];
+    }
   })();
   return pageChunks.map(wrapPage).join('\n');
   };
