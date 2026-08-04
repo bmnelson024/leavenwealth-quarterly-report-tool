@@ -4163,7 +4163,9 @@ function processInvestmentData(opts){
       if(!state.invPrevMetrics){
         // No prior save and nothing entered manually — use the derived prior
         // outright so the QoQ table and expense comparison aren't blank.
-        state.invPrevMetrics={totalIncome:derivedPrev.totalIncome,totalExpense:derivedPrev.totalExpense,noi:derivedPrev.noi,capex:derivedPrev.capex,expenseCategories:derivedPrev.expenseCategories};
+        // occupancy is NOT derivable from T12 income statements — explicit null
+        // so the QoQ tables render "—" instead of "undefined%".
+        state.invPrevMetrics={totalIncome:derivedPrev.totalIncome,totalExpense:derivedPrev.totalExpense,noi:derivedPrev.noi,capex:derivedPrev.capex,occupancy:null,expenseCategories:derivedPrev.expenseCategories};
         state._invPrevSource='derived-from-T12s';
         showToast("✓ Prior-quarter financials derived from the T12 income statements ("+derivedPrev.propCount+" propert"+(derivedPrev.propCount===1?"y":"ies")+")");
       } else if(!(state.invPrevMetrics.expenseCategories||[]).length){
@@ -4529,7 +4531,7 @@ ${(()=>{
     <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td><td class="${prev&&m.totalIncome>=prev.totalIncome?"neg":"pos"}">${fmtChg(m.totalIncome,prev?.totalIncome??null)}</td></tr>
     <tr><td>Total Expenses</td><td>${prev?fmtWhole(prev.totalExpense):"—"}</td><td>${fmtWhole(m.totalExpense)}</td><td class="${prev&&m.totalExpense<=prev.totalExpense?"neg":"pos"}">${fmtChg(m.totalExpense,prev?.totalExpense??null)}</td></tr>
     <tr><td>Net Operating Income</td><td>${prev?fmtWhole(prev.noi):"—"}</td><td>${fmtWhole(m.noi)}</td><td class="${prev&&m.noi>=prev.noi?"neg":"pos"}">${fmtChg(m.noi,prev?.noi??null)}</td></tr>
-    <tr><td>Avg Physical Occupancy</td><td>${prev?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td><td class="${prev&&m.occupancy>=prev.occupancy?"neg":"pos"}">${fmtOccChg(m.occupancy,prev?.occupancy??null)}</td></tr>
+    <tr><td>Avg Physical Occupancy</td><td>${prev&&prev.occupancy!=null?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td><td class="${prev&&prev.occupancy!=null&&m.occupancy>=prev.occupancy?"neg":"pos"}">${prev?.occupancy!=null?fmtOccChg(m.occupancy,prev.occupancy):"—"}</td></tr>
     <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td><td class="${prev&&m.delinquency<=prev.delinquency?"neg":"pos"}">${prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—"}</td></tr>
     ${m.capex?`<tr><td>Capital Expenditures</td><td>${prev&&prev.capex!=null?fmtWhole(prev.capex):"—"}</td><td>${fmtWhole(m.capex)}</td><td class="${prev&&prev.capex!=null&&m.capex<=prev.capex?"neg":"pos"}">${prev?.capex!=null?fmtChg(m.capex,prev.capex):"—"}</td></tr>`:""}
   </tbody></table>`;
@@ -5249,7 +5251,7 @@ function buildVestmintReport(m,n,invName,quarter,sections){
     <tr><td>Total Income</td><td>${prev?fmtWhole(prev.totalIncome):"—"}</td><td>${fmtWhole(m.totalIncome)}</td>${chgCell(m.totalIncome,prev?prev.totalIncome:null,false,fmtChg(m.totalIncome,prev?.totalIncome??null))}</tr>
     <tr><td>Total Expenses</td><td>${prev?fmtWhole(prev.totalExpense):"—"}</td><td>${fmtWhole(m.totalExpense)}</td>${chgCell(m.totalExpense,prev?prev.totalExpense:null,true,fmtChg(m.totalExpense,prev?.totalExpense??null))}</tr>
     <tr><td>Net Operating Income</td><td>${prev?fmtWhole(prev.noi):"—"}</td><td>${fmtWhole(m.noi)}</td>${chgCell(m.noi,prev?prev.noi:null,false,fmtChg(m.noi,prev?.noi??null))}</tr>
-    <tr><td>Avg Physical Occupancy</td><td>${prev?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td>${chgCell(m.occupancy,prev?prev.occupancy:null,false,fmtOccChg(m.occupancy,prev?.occupancy??null))}</tr>
+    <tr><td>Avg Physical Occupancy</td><td>${prev&&prev.occupancy!=null?prev.occupancy+"%":"—"}</td><td>${m.occupancy}%</td>${chgCell(m.occupancy,prev&&prev.occupancy!=null?prev.occupancy:null,false,prev?.occupancy!=null?fmtOccChg(m.occupancy,prev.occupancy):"—")}</tr>
     <tr><td>Total Delinquency</td><td>${prev&&prev.delinquency!=null?fmtWhole(prev.delinquency):"—"}</td><td>${fmtWhole(m.delinquency)}</td>${chgCell(m.delinquency,prev&&prev.delinquency!=null?prev.delinquency:null,true,prev?.delinquency!=null?fmtChg(m.delinquency,prev.delinquency):"—")}</tr>
   </tbody></table>`;
 
@@ -6885,7 +6887,9 @@ const sortRentRollFiles=rrFiles=>{
   if(rrFiles.length>=2&&months.every(m=>m!=null)&&new Set(months).size===rrFiles.length){
     rrFiles.sort((a,b)=>rrMonthFromName(a.name)-rrMonthFromName(b.name));
   }else{
-    sortRentRollFiles(rrFiles);
+    // Fallback: browser download-suffix order — "(1)", "(2)" — when filename
+    // months are missing, ambiguous, or duplicated.
+    rrFiles.sort((a,b)=>rrSuffix(a.name)-rrSuffix(b.name));
   }
 };
 // Reorders state.files.rr1/rr2/rr3 CHRONOLOGICALLY by each file's own "As of"
