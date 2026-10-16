@@ -843,6 +843,7 @@ function loadInvPrevFromSave(saveKey){
     const d=JSON.parse(dbGet(SAVE_PREFIX+saveKey)||"null");
     if(!d||!d.invMetrics){showError("Could not load metrics from that save.");return;}
     state.invPrevMetrics=d.invMetrics;
+    state.invPrevMetrics._sourceLabel="saved "+(d.currentQuarter||"prior quarter")+" report"+(d.investmentName?" — "+d.investmentName:"");
     state._invPrevSource=saveKey;
     state._showInvPrevPicker=false;
     render();
@@ -1262,7 +1263,7 @@ async function loadSave(key){
       vmReportHTML:null,
       invReportHTML:null,
       // Reset transient UI flags — these are never saved and must not bleed across sessions
-      _showInvPrevPicker:false, _invPrevSource:null,
+      _showInvPrevPicker:false, _showInvPrevEdit:false, _invPrevSource:null,
       // Freshly-loaded state matches what's on disk, so suppress the "save before
       // continuing?" prompt that would otherwise fire on the next advance.
       _savedThisStep:true,
@@ -4222,7 +4223,7 @@ function processInvestmentData(opts){
     const _gotPrev=results.filter(m=>m._prevQ);
     let derivedPrev=null;
     if(_gotPrev.length>0){
-      const _dpSum=f=>_gotPrev.reduce((s,m)=>s+(m._prevQ[f]||0),0);
+      const _dpSum=f=>Math.round(_gotPrev.reduce((s,m)=>s+(m._prevQ[f]||0),0)*100)/100;
       const _dpCatMap={};
       _gotPrev.forEach(m=>(m._prevQ.expenseCategories||[]).forEach(c=>{const k=(c.name||"").trim();if(k)_dpCatMap[k]=(_dpCatMap[k]||0)+(c.amount||0);}));
       derivedPrev={
@@ -4244,11 +4245,15 @@ function processInvestmentData(opts){
     }
     const totalCapex=results.reduce((s,m)=>s+(m.capex||0),0);
     const unitCurrentRents=_buildUnitCurrentRents();
+    // Round portfolio sums to cents — summing per-property floats leaves
+    // binary-float tails (e.g. 80115.65000000001) that leaked into the
+    // prior-quarter override inputs (Brian, Oct 2026).
+    const _c=v=>(typeof v==='number'&&isFinite(v))?Math.round(v*100)/100:v;
     // _annualFallback is stamped INTO invMetrics so it persists through save/
     // resume (audit 2026-07-23 M-2): investment/vestmint skip rehydration, so a
     // transient flag alone let corrupted ~4× metrics slip past the generation
     // gates after a resume. undefined (not false) so clean runs don't bloat saves.
-    state.invMetrics={totalIncome:_totalIncome,totalExpense:_totalExpense,noi:_noi,capex:totalCapex,delinquency,newLeases,renewals,inquiries,applications,lossToLease,occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents,_annualFallback:(state._incomeAnnualFallback===true)||undefined};
+    state.invMetrics={totalIncome:_c(_totalIncome),totalExpense:_c(_totalExpense),noi:_c(_noi),capex:_c(totalCapex),delinquency:_c(delinquency),newLeases,renewals,inquiries,applications,lossToLease:_c(lossToLease),occupancy,avgEconOcc,propertyCount:results.length,totalUnits:totalUnitsPortfolio,propertyMetrics:results,expenseCategories:portfolioExpenseCats,unitCurrentRents,_annualFallback:(state._incomeAnnualFallback===true)||undefined};
     state.invMetrics._derivedPrev=derivedPrev||undefined;
     if(derivedPrev&&derivedPrev.complete){
       if(!state.invPrevMetrics){
@@ -4256,7 +4261,7 @@ function processInvestmentData(opts){
         // outright so the QoQ table and expense comparison aren't blank.
         // occupancy is NOT derivable from T12 income statements — explicit null
         // so the QoQ tables render "—" instead of "undefined%".
-        state.invPrevMetrics={totalIncome:derivedPrev.totalIncome,totalExpense:derivedPrev.totalExpense,noi:derivedPrev.noi,capex:derivedPrev.capex,occupancy:null,expenseCategories:derivedPrev.expenseCategories};
+        state.invPrevMetrics={totalIncome:derivedPrev.totalIncome,totalExpense:derivedPrev.totalExpense,noi:derivedPrev.noi,capex:derivedPrev.capex,occupancy:null,expenseCategories:derivedPrev.expenseCategories,_sourceLabel:"derived from this quarter's T12 income statements (prior-quarter months)"};
         state._invPrevSource='derived-from-T12s';
         showToast("✓ Prior-quarter financials derived from the T12 income statements ("+derivedPrev.propCount+" propert"+(derivedPrev.propCount===1?"y":"ies")+")");
       } else if(!(state.invPrevMetrics.expenseCategories||[]).length){
@@ -4428,20 +4433,23 @@ function genBpNarrative(){
     // Merge, don't short-circuit (audit M-3): an imported current-rent file for one
     // property must supplement — not hide — the rents built from other properties' rr3s.
     const currentRents={...((state.invMetrics&&state.invMetrics.unitCurrentRents)||{}),...((bp.bpCurrentRentParsed&&bp.bpCurrentRentParsed.unitRents)||{})};
-    let totalUplift=0,roiUnits=0;
+    // Matched-unit ROI (Brian, Oct 2026): numerator AND denominator cover the
+    // same units — rent uplift on units with both launch + current rent, divided
+    // by what THOSE units cost. Dividing by all remodels' spend understated ROI
+    // and made it creep up each quarter as more remodeled units leased.
+    let totalUplift=0,roiUnits=0,matchedCost=0;
     remodels.forEach(u=>{
       const nk=normUnitKey(u.unit);
       const lr=launchRents[nk]||overrides[nk]||0;
       const cr=currentRents[nk]||0;
-      if(lr>0&&cr>0){totalUplift+=(cr-lr);roiUnits++;}
+      if(lr>0&&cr>0){totalUplift+=(cr-lr);roiUnits++;matchedCost+=(u.totalCost||0);}
     });
     if(roiUnits>0){
-      const remodelsTotal=Math.round(remodels.reduce((s,u)=>s+u.totalCost,0));
       const monthlyUplift=Math.round(totalUplift/roiUnits);
       const annualUplift=Math.round(monthlyUplift*12*roiUnits);
-      const roi=remodelsTotal>0?Math.round(annualUplift/remodelsTotal*100*10)/10:null;
+      const roi=matchedCost>0?Math.round(annualUplift/matchedCost*100*10)/10:null;
       if(monthlyUplift>0){
-        roiSentence=` Across the ${roiUnits} remodeled unit${roiUnits!==1?"s":""} with confirmed current rents, the average monthly rent uplift is $${monthlyUplift.toLocaleString()} per unit, generating $${annualUplift.toLocaleString()} in incremental annual rent${roi!==null?` and a ${roi}% return on remodel spend`:""}.`;
+        roiSentence=` Across the ${roiUnits} remodeled unit${roiUnits!==1?"s":""} with confirmed current rents, the average monthly rent uplift is $${monthlyUplift.toLocaleString()} per unit, generating $${annualUplift.toLocaleString()} in incremental annual rent${roi!==null?` — a ${roi}% return on the $${Math.round(matchedCost).toLocaleString()} invested in those units`:""}.`;
       }
     }
   }
@@ -4986,19 +4994,22 @@ ${(()=>{
   const _overrides3=_bp3.bpLaunchRentOverrides||{};
   // Merge, don't short-circuit (audit M-3) — see uploadBpCurrentRent.
   const _currentRents3={...((state.invMetrics&&state.invMetrics.unitCurrentRents)||{}),...((_bp3.bpCurrentRentParsed&&_bp3.bpCurrentRentParsed.unitRents)||{})};
-  let _totalUplift3=0, _roiUnits3=0;
+  let _totalUplift3=0, _roiUnits3=0, _matchedCost3=0;
   _remodels3.forEach(u=>{
     const nk=normUnitKey(u.unit);
     const launchR=_launchRents3[nk]||_overrides3[nk]||0;
     const curR=_currentRents3[nk]||0;
-    if(launchR>0&&curR>0){_totalUplift3+=(curR-launchR);_roiUnits3++;}
+    if(launchR>0&&curR>0){_totalUplift3+=(curR-launchR);_roiUnits3++;_matchedCost3+=(u.totalCost||0);}
   });
   const _hasPerUnit3=_roiUnits3>0;
   const _avgLaunch3=_hasPerUnit3?Math.round(_remodels3.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=_launchRents3[nk]||_overrides3[nk]||0;const cr=_currentRents3[nk]||0;return(lr>0&&cr>0)?s+lr:s;},0)/_roiUnits3):_launch3;
   const _avgCur3=_hasPerUnit3?Math.round(_remodels3.reduce((s,u)=>{const nk=normUnitKey(u.unit);const lr=_launchRents3[nk]||_overrides3[nk]||0;const cr=_currentRents3[nk]||0;return(lr>0&&cr>0)?s+cr:s;},0)/_roiUnits3):_cur3;
   const _monthlyUplift3=_hasPerUnit3?Math.round(_totalUplift3/_roiUnits3):_cur3-_launch3;
   const _annualUplift3=Math.round(_monthlyUplift3*12*(_hasPerUnit3?_roiUnits3:_remodels3.length));
-  const _roi3=_remodelsTotal3>0?Math.round(_annualUplift3/_remodelsTotal3*100*10)/10:null;
+  // Matched-unit ROI: per-unit path divides by the cost of the SAME units whose
+  // uplift is counted; portfolio-avg fallback (all units) keeps total spend.
+  const _roiDen3=_hasPerUnit3?_matchedCost3:_remodelsTotal3;
+  const _roi3=_roiDen3>0?Math.round(_annualUplift3/_roiDen3*100*10)/10:null;
   return `<div class="page">
   <div class="pn">${inv}</div><div class="sh">Business Plan Status — ${qtr}</div>
   ${_hasRoi3&&(_monthlyUplift3||_annualUplift3)?`<div class="sh2">Remodel ROI${_hasPerUnit3?` <span style="font-size:9px;font-weight:400;color:var(--muted)">(${_roiUnits3} of ${_remodels3.length} units matched)</span>`:'<span style="font-size:9px;font-weight:400;color:var(--muted)"> (portfolio avg)</span>'}</div>
@@ -5016,7 +5027,7 @@ ${(()=>{
     <div style="background:var(--dark);border-radius:8px;padding:14px 16px;text-align:center;">
       <div style="font-size:9px;color:var(--teal);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Remodel ROI</div>
       <div style="font-size:24px;font-weight:700;color:white">${_roi3!==null?_roi3+'%':'—'}</div>
-      <div style="font-size:10px;color:var(--teal);margin-top:4px">annual uplift ÷ remodel spend</div>
+      <div style="font-size:10px;color:var(--teal);margin-top:4px">${_hasPerUnit3?`annual uplift ÷ $${Math.round(_matchedCost3).toLocaleString()} spent on those units`:'annual uplift ÷ remodel spend'}</div>
     </div>
   </div>`:''}
   ${_hasNarrative3?`<div class="sh2">Business Plan Narrative</div>
@@ -5904,20 +5915,24 @@ function renderInvestmentStep0(){
           return`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
             <div>
               <div style="font-size:12px;font-weight:700;color:#16a34a;margin-bottom:4px">✓ Previous quarter data loaded</div>
-              <div style="font-size:12px;color:#5a8070">Income: ${fmtWhole(prev.totalIncome)} &nbsp;·&nbsp; Expenses: ${fmtWhole(prev.totalExpense)} &nbsp;·&nbsp; NOI: ${fmtWhole(prev.noi)} &nbsp;·&nbsp; Occ: ${prev.occupancy}% &nbsp;·&nbsp; Delinquency: ${fmtWhole(prev.delinquency||0)}</div>
+              <div style="font-size:12px;color:#5a8070">Income: ${fmtWhole(prev.totalIncome)} &nbsp;·&nbsp; Expenses: ${fmtWhole(prev.totalExpense)} &nbsp;·&nbsp; NOI: ${fmtWhole(prev.noi)} &nbsp;·&nbsp; Occ: ${prev.occupancy!=null&&prev.occupancy!==""?prev.occupancy+"%":"—"} &nbsp;·&nbsp; Delinquency: ${fmtWhole(prev.delinquency||0)} &nbsp;·&nbsp; CapEx: ${fmtWhole(prev.capex||0)}</div>
+              <div style="font-size:11px;color:#9ca3af;margin-top:3px">Source: ${escapeHtml(prev._sourceLabel||"previous quarter (source not recorded)")}${prev._edited?" · edited manually":""}</div>
             </div>
-            <button onclick="clearInvPrevMetrics()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0">✕ Clear</button>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              <button onclick="state._showInvPrevEdit=!state._showInvPrevEdit;render()" style="background:white;border:1px solid #c8e6de;color:#1a3a35;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">${state._showInvPrevEdit?"✓ Done":"✎ Edit"}</button>
+              <button onclick="clearInvPrevMetrics()" style="background:white;border:1px solid #fca5a5;color:#dc2626;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">✕ Clear</button>
+            </div>
           </div>
-          <div style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px">
-            <div style="font-size:12px;font-weight:600;color:#1a3a35;margin-bottom:8px">Or override manually:</div>
+          ${state._showInvPrevEdit?`<div style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px">
+            <div style="font-size:12px;font-weight:600;color:#1a3a35;margin-bottom:8px">Override manually <span style="font-weight:400;color:#9ca3af">— only if a loaded number is wrong</span>:</div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;gap:8px">
               ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"],["capex","Capital Exp.","e.g. 18000"]].map(([k,l,ph])=>`<div>
                 <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">${l}</label>
-                <input type="number" placeholder="${ph}" value="${prev[k]||""}" oninput="state.invPrevMetrics=state.invPrevMetrics||{};state.invPrevMetrics['${k}']=parseFloat(this.value)||0"
+                <input type="number" placeholder="${ph}" value="${(prev[k]||prev[k]===0)&&isFinite(prev[k])?(k==='occupancy'?Math.round(prev[k]*10)/10:Math.round(prev[k]*100)/100):""}" oninput="state.invPrevMetrics=state.invPrevMetrics||{};state.invPrevMetrics['${k}']=parseFloat(this.value)||0;state.invPrevMetrics._edited=true" onchange="render()"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
               </div>`).join("")}
             </div>
-          </div>`;
+          </div>`:""}`;
         }
         if(state._showInvPrevPicker){
           return`<div>
@@ -5937,7 +5952,7 @@ function renderInvestmentStep0(){
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;gap:8px;margin-top:10px">
               ${[["totalIncome","Total Income","e.g. 485000"],["totalExpense","Total Expenses","e.g. 220000"],["noi","NOI","e.g. 265000"],["occupancy","Occupancy %","e.g. 91"],["delinquency","Delinquency","e.g. 4200"],["capex","Capital Exp.","e.g. 18000"]].map(([k,l,ph])=>`<div>
                 <label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">${l}</label>
-                <input type="number" placeholder="${ph}" oninput="(function(v){state.invPrevMetrics=state.invPrevMetrics||{totalIncome:0,totalExpense:0,noi:0,occupancy:0,delinquency:0,capex:0};state.invPrevMetrics['${k}']=parseFloat(v)||0;})(this.value)"
+                <input type="number" placeholder="${ph}" oninput="(function(v){state.invPrevMetrics=state.invPrevMetrics||{totalIncome:0,totalExpense:0,noi:0,occupancy:0,delinquency:0,capex:0};state.invPrevMetrics['${k}']=parseFloat(v)||0;state.invPrevMetrics._sourceLabel='entered manually';})(this.value)"
                   style="width:100%;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
               </div>`).join("")}
             </div>
@@ -6001,6 +6016,13 @@ function renderInvestmentStep0(){
         <button onclick="processInvestmentData({stayOnStep:true})" style="width:100%;padding:10px 0;margin-bottom:16px;border-radius:8px;border:none;background:#1a3a35;color:white;font-weight:700;font-size:13px;cursor:pointer;font-family:Inter,sans-serif;display:flex;align-items:center;justify-content:center;gap:8px">
           ↺ Refresh All Data
         </button>
+        <div style="background:#f0fdf8;border:1px solid #c8e6de;border-radius:8px;padding:10px 12px;margin-bottom:16px;font-size:11px;color:#1a3a35;line-height:1.55">
+          <div style="font-weight:700;margin-bottom:4px">📋 Files to import</div>
+          <div><strong>1. Amount Spent to Date</strong> — CapEx report, <em>all dates since acquisition</em> (not just this quarter). AppFolio: General Ledger. Buildium: Transaction Detail by Account. Fills Spent to Date + Units Completed.</div>
+          <div><strong>2. Rent at Project Launch</strong> — rent roll(s) from the time of purchase (AppFolio or Buildium; select multiple files at once).</div>
+          <div><strong>3. Current Rent</strong> — <em>optional</em>. This quarter's rent roll(s); if skipped, uses the rent rolls already uploaded above.</div>
+          <div style="color:#5a8070;margin-top:4px">Type in manually: Total Remodel Budget.</div>
+        </div>
         <div style="font-size:11px;font-weight:700;color:#1a3a35;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Remodel Progress</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           <div><label style="font-size:11px;font-weight:600;color:#1a3a35;display:block;margin-bottom:3px">Units Completed</label>
@@ -6024,7 +6046,7 @@ function renderInvestmentStep0(){
               <input type="text" placeholder="e.g. 960,000" value="${escapeHtml(state.businessPlan.spentToDate)}"
                 oninput="state.businessPlan.spentToDate=this.value"
                 style="flex:1;padding:7px 8px;border:1px solid #c8e6de;border-radius:6px;font-size:13px;font-family:Inter,sans-serif"/>
-              <button onclick="uploadBpCapex()" title="Import from CapEx report" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
+              <button onclick="uploadBpCapex()" title="CapEx report, all dates since acquisition — AppFolio General Ledger or Buildium Transaction Detail by Account" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
             </div>
             ${state.businessPlan.bpCapexParsed?`<div style="font-size:10px;color:#2e7d6e;margin-top:3px">✓ ${state.businessPlan.bpCapexParsed.remodelsCount>0?state.businessPlan.bpCapexParsed.remodelsCount+' remodeled unit'+(state.businessPlan.bpCapexParsed.remodelsCount!==1?'s':'')+' identified — ':''}total auto-filled</div>`:""}
           </div>
@@ -6040,7 +6062,7 @@ function renderInvestmentStep0(){
                   oninput="state.businessPlan.launchRentPerUnit=this.value;state.businessPlan.bpLaunchRentParsed=null;"
                   style="flex:1;padding:7px 8px;border:none;outline:none;font-size:13px;font-family:Inter,sans-serif"/>
               </div>
-              <button onclick="uploadBpLaunchRent()" title="Import from rent roll at purchase" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
+              <button onclick="uploadBpLaunchRent()" title="Rent roll(s) from the time of purchase — AppFolio or Buildium, multiple files OK" style="padding:7px 10px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
             </div>
             ${(()=>{
               const lrp=state.businessPlan.bpLaunchRentParsed;
@@ -6055,7 +6077,7 @@ function renderInvestmentStep0(){
           <div>
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
               <label style="font-size:11px;font-weight:600;color:#1a3a35">Current Rent / Occupied Unit</label>
-              <button onclick="uploadBpCurrentRent()" title="Import current quarter rent roll" style="padding:4px 9px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
+              <button onclick="uploadBpCurrentRent()" title="Optional — this quarter\'s rent roll(s); otherwise uses the rent rolls uploaded above" style="padding:4px 9px;border:1px solid #c8e6de;border-radius:6px;background:#e6f9f4;color:#1a3a35;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">📂 Import</button>
             </div>
             ${(()=>{
                 const crp=state.businessPlan.bpCurrentRentParsed;
@@ -7526,6 +7548,41 @@ function clearPhoto(){
   _refreshReportHTML();
   render();
 }
+// Q/Q preview on the investment / VestMint Review Metrics step — mirrors the
+// single-property "Q/Q Summary" box and uses the SAME rows and change math as
+// the generated report's Summary table (buildInvestmentReport), so the preview
+// and the final output always agree (Brian, Oct 2026).
+function _invQoQPreviewHTML(m){
+  const prev=state.invPrevMetrics;
+  const fmtChg=(c,p)=>(p!=null&&Math.abs(p)>0)?((c-p)/Math.abs(p)*100>=0?"+":"")+((c-p)/Math.abs(p)*100).toFixed(0)+"%":"—";
+  const fmtOccChg=(c,p)=>p!=null?(c-p>=0?"+":"")+(c-p)+"%":"—";
+  const label=calcPrevQuarterLabel(state.currentQuarter||"")||"Prior Quarter";
+  const cls=(chg,c,p,goodDown)=>(chg==="—"||p==null)?"chg-neutral":((goodDown?c<=p:c>=p)?"chg-pos":"chg-neg");
+  const has=v=>v!=null&&v!=="";
+  const rows=[
+    ["Total Income",m.totalIncome,prev&&has(prev.totalIncome)?prev.totalIncome:null,false,false],
+    ["Total Expenses",m.totalExpense,prev&&has(prev.totalExpense)?prev.totalExpense:null,true,false],
+    ["Net Operating Income",m.noi,prev&&has(prev.noi)?prev.noi:null,false,false],
+    ["Avg Physical Occupancy",m.occupancy,prev&&has(prev.occupancy)?prev.occupancy:null,false,true],
+    ["Total Delinquency",m.delinquency,prev&&has(prev.delinquency)?prev.delinquency:null,true,false],
+  ];
+  if(m.capex) rows.push(["Capital Expenditures",m.capex,prev&&has(prev.capex)?prev.capex:null,true,false]);
+  const body=rows.map(([l,c,p,goodDown,isOcc])=>{
+    const chg=isOcc?(p!=null?fmtOccChg(c,p):"—"):fmtChg(c,p);
+    const f=v=>v==null?"—":(isOcc?v+"%":fmtWhole(v));
+    return `<tr><td>${l}</td><td>${f(p)}</td><td><strong>${f(c)}</strong></td><td class="${cls(chg,c,p,goodDown)}">${chg}</td></tr>`;
+  }).join("");
+  const note=prev
+    ? (prev._sourceLabel?`<div style="font-size:11px;color:#9ca3af;margin-top:6px">Prior quarter source: ${escapeHtml(prev._sourceLabel)}${prev._edited?" · edited manually":""}</div>`:"")
+    : `<div style="font-size:11px;color:#92400e;margin-top:6px">No previous quarter data loaded — set it under Previous Quarter Comparison on the Setup step to fill in this column.</div>`;
+  return `<div class="metric-box">
+          <div class="metric-box-title">Q/Q Summary</div>
+          <table>
+            <thead><tr><th>Metric</th><th>${escapeHtml(label)}</th><th>${escapeHtml(state.currentQuarter||"")}</th><th>Change</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>${note}
+        </div>`;
+}
 function calcPrevQuarterLabel(quarter){
   const m=(quarter||"").match(/[Qq]\s*([1-4])[\s\/\-,\.]*\s*(\d{4})/);
   if(!m) return null;
@@ -8701,6 +8758,7 @@ function render(){
       const el=document.getElementById("step-content");
       el.innerHTML=`
         <h2 style="font-size:16px;font-weight:600;margin-bottom:14px">Review Investment Metrics</h2>
+        ${_invQoQPreviewHTML(m)}
         <div class="metric-box">
           <div class="metric-box-title">Portfolio Snapshot — ${state.currentQuarter||""}</div>
           <table>
@@ -8839,6 +8897,7 @@ function render(){
       const el=document.getElementById("step-content");
       el.innerHTML=`
         <h2 style="font-size:16px;font-weight:600;margin-bottom:14px">Review Fund Metrics</h2>
+        ${_invQoQPreviewHTML(m)}
         <div class="metric-box">
           <div class="metric-box-title">Portfolio Snapshot — ${state.currentQuarter||""}</div>
           <table>
@@ -9429,7 +9488,7 @@ function _beginNextQuarter(src,name,nextQ){
       const prevKey=findPrevQuarterSaveKeyFor(name,true);
       if(prevKey){
         const pd=JSON.parse(dbGet(SAVE_PREFIX+prevKey)||"null");
-        if(pd&&pd.invMetrics){ state.invPrevMetrics=pd.invMetrics; state._invPrevSource=prevKey; }
+        if(pd&&pd.invMetrics){ state.invPrevMetrics=pd.invMetrics; state.invPrevMetrics._sourceLabel="saved "+(pd.currentQuarter||"prior quarter")+" report"+(pd.investmentName?" — "+pd.investmentName:""); state._invPrevSource=prevKey; }
         // VestMint: carry the Other Assets STRUCTURE forward (e.g. Real Freedom
         // Fund) — the asset names persist quarter to quarter, but each entry
         // starts without HTML since every quarter gets a fresh fund report file.
