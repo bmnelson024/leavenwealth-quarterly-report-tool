@@ -2153,6 +2153,83 @@ const communityMatches = (communityName, propName) => {
   };
   return commAliases.some(c => propAliases.some(p => _match(c, p)));
 };
+// Rent Engine export parser — tolerant of Buildium header renames.
+// Oct 2026: Buildium switched the export from one row per community
+// ("Community Name", "Leads", "Apps Submitted") to one row per listing
+// ("Community", "Prospects", "Apps Submitted"). Accept both layouts.
+// Matching: rows whose community matches the property name are used. If none
+// match but the file holds exactly ONE community (a per-property export, e.g.
+// "Greenway 1 Q3 26 Rent Engine Report.csv" whose rows all say
+// "The Greenway Townhomes"), all rows are used and a note is shown.
+//
+// Greenway split (Brian, Oct 2026): Buildium lists Greenway 1 and Greenway 2
+// under one community ("The Greenway Townhomes"), so the tool splits by street
+// number in the Address column: < 2000 → Greenway 1, ≥ 2000 → Greenway 2.
+//
+// Quarter filter (Brian, Oct 2026): Prospects/Apps are lifetime-per-listing
+// counts. When `quarter` (e.g. "Q3 2026") is given and the export has Posted +
+// DOM columns, listings whose estimated off-market date (Posted + DOM) falls
+// before the quarter start are skipped — their activity belongs to an earlier
+// quarter. Rows with an unreadable Posted date are kept.
+// Returns {rows, inquiries, applications, warning, excluded}.
+function _reParseMDY(s){
+  // Buildium format "Jun 23 2026" — parsed by hand (Safari's Date() is unreliable here).
+  const m=String(s||"").trim().match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})$/);
+  if(!m) return null;
+  const mi=["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(m[1].toLowerCase());
+  return mi<0?null:new Date(parseInt(m[3]),mi,parseInt(m[2]));
+}
+function parseRentEngine(text, propName, quarter){
+  const all=parseDelim(text||"");
+  const commOf=r=>String(r["Community Name"]??r["Community"]??"").trim();
+  const num=v=>parseInt(String(v??"").replace(/[^0-9-]/g,""))||0;
+  const inqOf=r=>num(r["Leads"]??r["Prospects"]??r["Inquiries"]??0);
+  const appOf=r=>num(r["Apps Submitted"]??r["Applications Submitted"]??r["Applications"]??0);
+  const withComm=all.filter(r=>commOf(r));
+  let rows=withComm.filter(r=>communityMatches(commOf(r), propName));
+  let warning="";
+  // Greenway 1 / 2 address split — applied before the generic name match so a
+  // "The Greenway Townhomes" file resolves without the mismatch note.
+  const gw=String(propName||"").match(/greenway\s*(1|2|i{1,2}|one|two)\b/i);
+  const hasAddr=all.some(r=>r["Address"]);
+  if(gw && hasAddr){
+    const isG1=/^(1|i|one)$/i.test(gw[1]);
+    const pool=withComm.filter(r=>/greenway/i.test(commOf(r)));
+    rows=pool.filter(r=>{
+      const n=parseInt((String(r["Address"]||"").match(/^\s*(\d+)/)||[])[1]);
+      if(isNaN(n)) return false;
+      return isG1 ? n<2000 : n>=2000;
+    });
+    if(rows.length===0) warning="Warning: Rent Engine file has no "+(isG1?"Greenway 1 (address < 2000)":"Greenway 2 (address ≥ 2000)")+" listings — inquiries/applications will be 0.";
+  } else if(rows.length===0){
+    const distinct=[...new Set(withComm.map(commOf))];
+    if(distinct.length===1){
+      rows=withComm;
+      warning="Note: Rent Engine community \""+distinct[0]+"\" doesn't match \""+propName+"\" by name — using all "+rows.length+" rows since the file contains only that one community.";
+    } else if(all.length>0){
+      warning="Warning: Rent Engine file uploaded but no rows matched \""+propName+"\" — inquiries/applications will be 0. Communities in file: "+(distinct.join(", ")||"(no Community / Community Name column found)")+".";
+    }
+  }
+  // Drop listings that went off-market before the quarter began.
+  let excluded=[];
+  const qm=String(quarter||"").match(/Q([1-4])\s*(\d{4})/i);
+  if(qm && rows.some(r=>r["Posted"]!==undefined && r["DOM"]!==undefined)){
+    const qS=new Date(parseInt(qm[2]),([0,3,6,9])[parseInt(qm[1])-1],1);
+    rows=rows.filter(r=>{
+      const p=_reParseMDY(r["Posted"]);
+      const dom=parseInt(String(r["DOM"]||"").replace(/[^0-9]/g,""));
+      if(!p||isNaN(dom)) return true;
+      const off=new Date(p.getFullYear(),p.getMonth(),p.getDate()+dom);
+      if(off<qS){excluded.push(r);return false;}
+      return true;
+    });
+    if(excluded.length){
+      const n=excluded.reduce((s,r)=>s+inqOf(r),0);
+      warning=(warning?warning+" ":"")+"Note: skipped "+excluded.length+" Rent Engine listing(s) that went off-market before "+qm[0].toUpperCase()+" ("+n+" prospects).";
+    }
+  }
+  return {rows, inquiries:rows.reduce((s,r)=>s+inqOf(r),0), applications:rows.reduce((s,r)=>s+appOf(r),0), warning, excluded};
+}
 // Shared Buildium rent-roll unit-row filter. Used by calcOcc (for occupancy
 // math) and the investment/single-property unitCount computations so all three
 // stay consistent. Rejects trailer aggregate rows like "1 Bed/1 Bath" even
@@ -3992,10 +4069,10 @@ function parsePropertyMetrics(prop){
       if(d&&d>=qS&&d<=qE){const lType=(r["Lease type"]||r["Lease Type"]||"").trim();if(lType){if(/renewal/i.test(lType))renewals++;else if(/new/i.test(lType))newLeases++;}else{const ir=String(r["IsRenewal"]||r["Is Renewal"]||"0").toLowerCase();if(["0","false","no"].includes(ir))newLeases++;if(["1","true","yes"].includes(ir))renewals++;}}
     });
     if(prop.files.rentEngine){
-      const pp=parseDelim(prop.files.rentEngine||"").filter(r=>communityMatches(r["Community Name"], prop.name));
-      if(pp.length===0) showError("Warning: Rent Engine file uploaded but no rows matched \""+prop.name+"\" — inquiries/applications will be 0 for this property.");
-      inquiries=pp.reduce((s,r)=>s+(parseInt(r["Leads"])||0),0);
-      applications=pp.reduce((s,r)=>s+(parseInt(r["Apps Submitted"])||0),0);
+      const re=parseRentEngine(prop.files.rentEngine, prop.name, state.currentQuarter);
+      if(re.warning) showError(re.warning);
+      inquiries=re.inquiries;
+      applications=re.applications;
     }
   }
   // Only average over months that have a rent roll uploaded — dividing by 3
@@ -6415,12 +6492,10 @@ function processBuildium() {
     // Word-boundary match via communityMatches(): prevents "Park" from
     // cross-matching "Park Place" rows (and vice versa) when the Rent Engine
     // export contains multiple properties.
-    const ppRows=parseDelim(state.files.rentEngine||"").filter(r=>communityMatches(r["Community Name"], state.propertyName));
-    if(state.files.rentEngine&&parseDelim(state.files.rentEngine||"").filter(r=>r["Community Name"]).length>0&&ppRows.length===0){
-      showError("Warning: Rent Engine file uploaded but no rows matched property name \""+state.propertyName+"\". Inquiries/applications will be 0. Check that the Community Name column matches.");
-    }
-    const inquiries=ppRows.reduce((s,r)=>s+(parseInt(r["Leads"])||0),0);
-    const applications=ppRows.reduce((s,r)=>s+(parseInt(r["Apps Submitted"])||0),0);
+    const _re=state.files.rentEngine?parseRentEngine(state.files.rentEngine, state.propertyName, state.currentQuarter):{inquiries:0,applications:0,warning:""};
+    if(_re.warning) showError(_re.warning);
+    const inquiries=_re.inquiries;
+    const applications=_re.applications;
     // Prior Quarter from 12-Month Income Statement
     const parsedPrevBu = parsePriorQuarterFromExcel(state.files.income, state.currentQuarter||"");
     if(parsedPrevBu){
