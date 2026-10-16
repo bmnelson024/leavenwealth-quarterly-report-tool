@@ -4417,11 +4417,11 @@ function genBpNarrative(){
   let rentSentence="";
   if(rentDelta!==null&&rentDeltaPct!==null){
     if(rentDelta>0){
-      rentSentence=` The renovation program has supported meaningful rent growth — average occupied rent has increased ${rentDeltaPct}% from the $${launch.toLocaleString()} per unit launch target to $${curRentPerUnit.toLocaleString()} currently.`;
+      rentSentence=` Average occupied rent across the portfolio has increased ${rentDeltaPct}%, from $${launch.toLocaleString()} per unit at project launch to $${curRentPerUnit.toLocaleString()} currently.`;
     } else if(rentDelta<0){
-      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit remains below the $${launch.toLocaleString()} per unit launch target, reflecting the early stage of the renovation program.`;
+      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit remains below the $${launch.toLocaleString()} per unit average at project launch.`;
     } else {
-      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit is in line with the launch target.`;
+      rentSentence=` Average occupied rent of $${curRentPerUnit.toLocaleString()} per unit is in line with the average at project launch.`;
     }
   }
 
