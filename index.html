@@ -1852,6 +1852,11 @@ const calcLossToLease = (marketRentTotal, actualRentTotal) => marketRentTotal - 
 // Tolerates the label variants seen across PMs: "Capital Expenses",
 // "Capital Improvements", "Capital Expenditures", "Maintenance - CapEx",
 // and the Indigo/hand-built "Cap Ex" / "CapEx" (Brian, Jul 2026).
+// Largest-first capex lines for narratives. Income-statement capexItems are in
+// STATEMENT order (alphabetical in Buildium), so slicing the first N without
+// sorting named the smallest lines and skipped the largest — e.g. Greenway 1
+// Q3 2026 listed concrete/electrical and omitted $170,747 of general labor.
+function _topCapex(items,n){return [...(items||[])].sort((a,b)=>(b.amount||0)-(a.amount||0)).slice(0,n);}
 const CAPEX_SECTION_PAT=/^(cap\s*ex(?:penses|penditures)?|capital\s+(?:expenses|expenditures|improvements)|maintenance\s*-\s*cap\s*ex)$/i;
 const CAPEX_TOTAL_PAT=/^total(?:\s+for)?\s+(cap\s*ex(?:penses|penditures)?|capital\s+(?:expenses|expenditures|improvements)|maintenance\s*-\s*cap\s*ex)$/i;
 const fmt = n => n == null ? "$0.00" : n < 0
@@ -2534,7 +2539,7 @@ const genNarratives = m => {
         return ` ${n} unit${n>1?" were":" was"} remodeled during the quarter${unitList}.`;
       })() : "";
       const keyInvest = m.capexItems&&m.capexItems.length>0
-        ? `Key investments included ${m.capexItems.slice(0,3).map(i=>i.name.toLowerCase()).join(", ")}.`
+        ? `Key investments included ${_topCapex(m.capexItems,3).map(i=>i.name.toLowerCase()).join(", ")}.`
         : "Spending remained focused on sustaining asset quality and supporting long-term property performance.";
       return capChg!==null
         ? `Capital expenditures ${capChg>=0?"increased":"decreased"} ${Math.abs(capChg).toFixed(0)}% quarter over quarter to ${fmtWhole(m.capex)}, ${capChg<0?"reflecting a gradual tapering of major project spend as capital initiatives from prior quarters near completion":"reflecting continued investment in property improvements and unit upgrades"}. ${keyInvest}${remodelSentence}`
@@ -2713,7 +2718,7 @@ async function rewriteWithClaude(kind){
                 .sort((a,b)=>Math.abs(b.amount||0)-Math.abs(a.amount||0))
                 .slice(0,6).map(c=>({name:c.name,amount:c.amount})),
               capex: p.capex||0,
-              capexItems: (p.capexItems||[]).slice(0,8).map(i=>({name:i.name,amount:i.amount}))
+              capexItems: _topCapex(p.capexItems,8).map(i=>({name:i.name,amount:i.amount}))
             })),
             capex: metrics.capex||0,
           },
@@ -2747,7 +2752,7 @@ async function rewriteWithClaude(kind){
             newLeases: metrics.newLeases, renewals: metrics.renewals,
             inquiries: metrics.inquiries, applications: metrics.applications,
             capex: metrics.capex||0, cashOnHand: metrics.cashOnHand||0,
-            capexItems: (metrics.capexItems||[]).slice(0,6).map(i=>({name:i.name,amount:i.amount})),
+            capexItems: _topCapex(metrics.capexItems,6).map(i=>({name:i.name,amount:i.amount})),
             // Top categories BY AMOUNT + matched pairwise comparison — see the
             // investment block's notes; identical fix for the single-property
             // payload (this is the one the Grandview false "did not recur"
@@ -4361,7 +4366,7 @@ function genInvestmentNarratives(m){
   return{
     income:`Total income across the ${n}-property portfolio for ${q} was ${fmtWhole(m.totalIncome)}, with a net operating income of ${fmtWhole(m.noi)}.${incChg!==null?` Income ${incChg>=0?"increased":"decreased"} ${Math.abs(incChg).toFixed(0)}% quarter over quarter.`:""} Weighted average physical occupancy stood at ${m.occupancy}%.${propIncomeDetail}`,
     expenses:`Total operating expenses for the portfolio were ${fmtWhole(m.totalExpense)} for ${q}.${expChg!==null?` Expenses ${expChg>=0?"increased":"decreased"} ${Math.abs(expChg).toFixed(0)}% quarter over quarter.`:""} The portfolio maintained disciplined cost management across all ${n} properties.${propExpenseDetail}`,
-    capex:(()=>{const pm=(m.propertyMetrics||[]).filter(p=>p.capex>0||((p.capexItems||[]).length>0));if(!pm.length) return"";return pm.map(p=>{const items=(p.capexItems||[]).slice(0,3).map(i=>i.name).join(", ");return`${p.name} recorded ${fmtWhole(p.capex)} in capital expenditures${items?` including ${items}`:""}.`;}).join(" ");})(),
+    capex:(()=>{const pm=(m.propertyMetrics||[]).filter(p=>p.capex>0||((p.capexItems||[]).length>0));if(!pm.length) return"";return pm.map(p=>{const items=_topCapex(p.capexItems,3).map(i=>i.name).join(", ");return`${p.name} recorded ${fmtWhole(p.capex)} in capital expenditures${items?` including ${items}`:""}.`;}).join(" ");})(),
     outlook:`The ${state.investmentName||"portfolio"} enters ${nextQtr(q)} with ${m.occupancy>=90?"strong":"stable"} occupancy at ${m.occupancy}% weighted average, supported by ${m.newLeases} new leases and ${m.renewals} renewals secured during ${q}.`
   };
 }
@@ -4541,7 +4546,9 @@ function buildInvestmentReport(m,n,invName,quarter,loan,sections){
     });
   }
   const n_photos=propPhotos.length;
-  const thumbW=190;
+  // Larger photos when only one or two properties are on the cover (Brian,
+  // Oct 2026) — 2×300px + 16px gap fits the 660px strip; 3+ keep 190px tiles.
+  const thumbW=n_photos<=2?300:190;
   const thumbH=Math.round(thumbW*0.65);
   const photoThumb=p=>`<div style="text-align:center;flex-shrink:0">
     ${p.photo
