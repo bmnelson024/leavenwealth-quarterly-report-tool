@@ -797,7 +797,12 @@ function currentSaveKey(){const isInv=state.source==='investment'||state.source=
 // Returns all single-property saves that have metrics saved
 function getSinglePropertySaves(){
   return getSavesIndex().filter(s=>s.source!=='investment'&&s.source!=='vestmint').map(s=>{
-    try{const d=JSON.parse(dbGet(SAVE_PREFIX+s.key)||"null");return d&&d.metrics?{key:s.key,propertyName:s.propertyName,quarter:s.quarter,metrics:d.metrics}:null;}catch(e){return null;}
+    try{const d=JSON.parse(dbGet(SAVE_PREFIX+s.key)||"null");if(!d||!d.metrics) return null;
+      // Economic occupancy for the Portfolio Summary (Brian, Oct 2026): prefer the
+      // value computed at processing; fall back to the saved monthly inputs.
+      const _eo=d.metrics.avgEconOcc||_econAvgStr(d.econOcc);
+      const metrics=Object.assign({},d.metrics,{_econ:_eo!=null&&_eo!==""&&!isNaN(parseFloat(_eo))?parseFloat(_eo):null});
+      return {key:s.key,propertyName:s.propertyName,quarter:s.quarter,metrics};}catch(e){return null;}
   }).filter(Boolean);
 }
 function importPropertyFromSave(propId,saveKey){
@@ -1582,6 +1587,7 @@ function _portfolioSortSaves(saves){
       case 'expenses': return m.totalExpense||0;
       case 'noi': return m.noi||0;
       case 'occ': return m.occupancy||0;
+      case 'econ': return m._econ!=null?m._econ:-1;
       case 'delinq': return m.delinquency||0;
       case 'capex': return m.capex||0;
       case 'leases': return m.newLeases||0;
@@ -1596,24 +1602,25 @@ function exportPortfolioToExcel(quarter){
   // Matches the on-screen table: same columns (incl. Capex) and same sort order.
   const saves=_portfolioSortSaves(getSinglePropertySaves().filter(s=>s.quarter===quarter));
   if(!saves.length) return;
-  const headers=['Property','Units','Income','Expenses','NOI','Occupancy %','Delinquency','Capex','New Leases','Renewals'];
+  const headers=['Property','Units','Income','Expenses','NOI','Occupancy %','Econ. Occupancy %','Delinquency','Capex','New Leases','Renewals'];
   const dataRows=saves.map(s=>{
     const m=s.metrics;
-    return[s.propertyName,m.unitCount||0,m.totalIncome||0,m.totalExpense||0,m.noi||0,m.occupancy||0,m.delinquency||0,m.capex||0,m.newLeases||0,m.renewals||0];
+    return[s.propertyName,m.unitCount||0,m.totalIncome||0,m.totalExpense||0,m.noi||0,m.occupancy||0,m._econ!=null?m._econ:'',m.delinquency||0,m.capex||0,m.newLeases||0,m.renewals||0];
   });
   const n=dataRows.length;
   const sum=i=>dataRows.reduce((a,r)=>a+(r[i]||0),0);
-  const totals=['TOTAL',sum(1),sum(2),sum(3),sum(4),n?Math.round(sum(5)/n):0,sum(6),sum(7),sum(8),sum(9)];
+  const _econRows=dataRows.filter(r=>r[6]!=='');
+  const totals=['TOTAL',sum(1),sum(2),sum(3),sum(4),n?Math.round(sum(5)/n):0,_econRows.length?Math.round(_econRows.reduce((a,r)=>a+r[6],0)/_econRows.length):'',sum(7),sum(8),sum(9),sum(10)];
   const ws=XLSX.utils.aoa_to_sheet([headers,...dataRows,totals]);
   // Dollar-format columns C-G and H (Income, Expenses, NOI, Occupancy%, Delinquency)
   const dollarFmt='"$"#,##0.00';
   const pctFmt='0"%"';
   const range=XLSX.utils.decode_range(ws['!ref']);
   for(let R=1;R<=range.e.r;R++){
-    [2,3,4,6,7].forEach(C=>{const cell=ws[XLSX.utils.encode_cell({r:R,c:C})];if(cell)cell.z=dollarFmt;});
-    const pctCell=ws[XLSX.utils.encode_cell({r:R,c:5})];if(pctCell)pctCell.z=pctFmt;
+    [2,3,4,7,8].forEach(C=>{const cell=ws[XLSX.utils.encode_cell({r:R,c:C})];if(cell)cell.z=dollarFmt;});
+    [5,6].forEach(C=>{const pctCell=ws[XLSX.utils.encode_cell({r:R,c:C})];if(pctCell&&pctCell.t==='n')pctCell.z=pctFmt;});
   }
-  ws['!cols']=[{wch:28},{wch:7},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:13},{wch:12},{wch:11}];
+  ws['!cols']=[{wch:28},{wch:7},{wch:14},{wch:14},{wch:14},{wch:12},{wch:17},{wch:14},{wch:13},{wch:12},{wch:11}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,quarter.replace(/[\\\/\?\*\[\]]/g,''));
   const buf=XLSX.write(wb,{bookType:'xlsx',type:'array'});
@@ -1658,6 +1665,16 @@ function renderPortfolioSummary(){
       return Math.round(withOcc.reduce((a,m)=>a+m.occupancy*m.unitCount,0)/units);
     return Math.round(withOcc.reduce((a,m)=>a+m.occupancy,0)/withOcc.length);
   })();
+  // Avg economic occupancy — same weighting rule as avgOcc; properties with no
+  // econ entry are excluded (shown as "—"), not counted as 0%.
+  const econProps=qSaves.map(s=>s.metrics).filter(m=>m&&m._econ!=null);
+  const avgEcon=(()=>{
+    if(!econProps.length) return null;
+    const units=econProps.reduce((a,m)=>a+(m.unitCount>0?m.unitCount:0),0);
+    if(units>0&&econProps.every(m=>m.unitCount>0))
+      return Math.round(econProps.reduce((a,m)=>a+m._econ*m.unitCount,0)/units);
+    return Math.round(econProps.reduce((a,m)=>a+m._econ,0)/econProps.length);
+  })();
   const totDelinq=sum(m=>m.delinquency);
   const totCapex=sum(m=>m.capex);
   const totLeases=sum(m=>m.newLeases);
@@ -1686,6 +1703,7 @@ function renderPortfolioSummary(){
         </div>
       </td>
       <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${m.occupancy!=null?m.occupancy+'%':'—'}</td>
+      <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${m._econ!=null?Math.round(m._econ)+'%':'—'}</td>
       <td style="padding:10px 8px;text-align:right;color:${(m.delinquency||0)>0?'#dc2626':'#374151'};font-size:13px">${fmtN(m.delinquency)}</td>
       <td style="padding:10px 8px;text-align:right;color:#374151;font-size:13px">${fmtN(m.capex)}</td>
       <td style="padding:10px 8px;text-align:center;color:#374151;font-size:13px">${m.newLeases!=null?m.newLeases:'—'}</td>
@@ -1717,6 +1735,7 @@ function renderPortfolioSummary(){
       <div style="${cardStyle}"><div style="${labelStyle}">Total NOI</div><div style="font-size:20px;font-weight:700;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</div><div style="${subStyle}">${totIncome?Math.round(totNoi/totIncome*100):0}% margin</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total Capex</div><div style="${valStyle}">${fmtN(totCapex)}</div><div style="${subStyle}">capital expenditures</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Avg Occupancy</div><div style="${valStyle}">${avgOcc}%</div><div style="${subStyle}">${n} properties</div></div>
+      <div style="${cardStyle}"><div style="${labelStyle}">Avg Econ. Occupancy</div><div style="${valStyle}">${avgEcon!=null?avgEcon+'%':'—'}</div><div style="${subStyle}">${econProps.length===n?n+' properties':econProps.length+' of '+n+' entered'}</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Total Delinquency</div><div style="font-size:20px;font-weight:700;color:${totDelinq>0?'#dc2626':'#16a34a'}">${fmtN(totDelinq)}</div><div style="${subStyle}">balance due</div></div>
       <div style="${cardStyle}"><div style="${labelStyle}">Leasing</div><div style="${valStyle}">${totLeases} new · ${totRenewals} renewals</div><div style="${subStyle}">this quarter</div></div>
     </div>
@@ -1724,7 +1743,7 @@ function renderPortfolioSummary(){
       <table style="width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden">
         <thead style="background:#f0f9f7">
           <tr>
-            ${[['name','Property',thStyleL],['units','Units',thStyle],['income','Income',thStyle],['expenses','Expenses',thStyle],['noi','NOI',thStyle],['occ','Occ %',thStyle],['delinq','Delinquency',thStyle],['capex','Capex',thStyle],['leases','New Leases',thStyleC],['renewals','Renewals',thStyleC]].map(([k,label,st])=>
+            ${[['name','Property',thStyleL],['units','Units',thStyle],['income','Income',thStyle],['expenses','Expenses',thStyle],['noi','NOI',thStyle],['occ','Occ %',thStyle],['econ','Econ Occ %',thStyle],['delinq','Delinquency',thStyle],['capex','Capex',thStyle],['leases','New Leases',thStyleC],['renewals','Renewals',thStyleC]].map(([k,label,st])=>
               `<th style="${st};cursor:pointer;user-select:none" title="Sort by ${label}" onclick="setPortfolioSort('${k}')">${label}${_portfolioSort.col===k?(_portfolioSort.dir===1?' ▲':' ▼'):''}</th>`).join('')}
           </tr>
         </thead>
@@ -1737,6 +1756,7 @@ function renderPortfolioSummary(){
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${fmtN(totExpense)}</td>
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:${totNoi>=0?'#16a34a':'#dc2626'}">${fmtN(totNoi)}</td>
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${avgOcc}%</td>
+            <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${avgEcon!=null?avgEcon+'%':'—'}</td>
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:${totDelinq>0?'#dc2626':'#16a34a'}">${fmtN(totDelinq)}</td>
             <td style="padding:10px 8px;text-align:right;font-size:13px;color:#1a3a35">${fmtN(totCapex)}</td>
             <td style="padding:10px 8px;text-align:center;font-size:13px;color:#1a3a35">${totLeases}</td>
