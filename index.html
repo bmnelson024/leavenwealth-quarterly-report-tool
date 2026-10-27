@@ -8318,17 +8318,26 @@ function parseAFCapexGL(fileData, quarterStr, opts) {
       const col0 = String(row[0]==null?"":row[0]).trim();
 
       // Section header detection: col A has text, date/debit/credit cols are null
-      const noData = row[colDate]==null && row[colDebit]==null && row[colCredit]==null;
+      // Empty cells can arrive as null OR "" (account-grouped exports write ""
+      // into section-header rows) — treat both as blank (Brian, Oct 2026).
+      const _blank = v => v==null || String(v).trim()==="";
+      const noData = _blank(row[colDate]) && _blank(row[colDebit]) && (colCredit<0 || _blank(row[colCredit]));
       if(col0 && noData) {
         // Always skip pure summary rows — never let them end the section
         if(/^(starting\s*balance|net\s*change|ending\s*balance|total)$/i.test(col0)) continue;
         // In month-grouped AF GL format, "Apr 2025" etc. are grouping headers only — skip without touching inCapexSection
         if(isAFGLMonthFormat && /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i.test(col0)) continue;
         // Classic format: GL account section header — toggle capex mode
-        if(/capital\s*expend/i.test(col0)) {
+        // Account-grouped exports label sections "7011 - Capex Remodel" (number +
+        // "Capex ..."), not "Capital Expenditures — ...". Recognize both; any other
+        // numbered GL account header ends the capex section even in files that
+        // carry the "GL Accounts:" banner (Brian, Oct 2026 — Altoona/Pleasant POD).
+        const _isCapexHdr = /capital\s*expend/i.test(col0) || /^\d[\d.\-]*\s*[-–—:]\s*cap\s*ex\b/i.test(col0);
+        const _isNumberedAcctHdr = /^\d[\d.\-]*\s*[-–—:]\s*\S/.test(col0);
+        if(_isCapexHdr) {
           inCapexSection = true; // Enter (or stay in) a capex account — accumulate across all capex accts
           currentAccount = col0; // remember which capex account this section is (for GL-account grouping)
-        } else if(!isAFGLMonthFormat) {
+        } else if(!isAFGLMonthFormat || _isNumberedAcctHdr) {
           inCapexSection = false; // Not a capex account — keep scanning in case more capex accounts appear later
           currentAccount = null;
         }
