@@ -8695,6 +8695,9 @@ const PROP_TAX_PATTERNS = [
   /real\s+estate\s+tax/i,
   /prop\.?\s+tax/i,
   /county\s+tax/i,
+  // RPM / AppFolio sub-account style: "Tax - Property" (BG Flats, Oct 2026).
+  // Anchored so "Tax - Sales" / "Tax - Local or Other" never match.
+  /^\s*tax(es)?\s*[-–—:]\s*(real\s+estate|property)\b/i,
   // Indigo / McClain statements (hand-built into AppFolio format) label the
   // line simply "Taxes" — EXACT match only, so "Taxes & Licenses" or
   // "Payroll Taxes" can never satisfy the property-tax check (Brian, Jul 2026).
